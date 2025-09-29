@@ -6,16 +6,10 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# -------------------------
-# Page Config
-# -------------------------
 st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide")
 st.title("⚽ Player Injury Impact Dashboard")
 st.markdown("Analyze how injuries affect player and team performance interactively!")
 
-# -------------------------
-# Generate Dummy Data (for demo)
-# -------------------------
 np.random.seed(42)
 players = [f"Player_{i}" for i in range(1, 21)]
 clubs = [f"Club_{i}" for i in range(1, 6)]
@@ -36,9 +30,6 @@ data = {
 
 df = pd.DataFrame(data)
 
-# -------------------------
-# Preprocessing
-# -------------------------
 df['Rating'] = df['Rating'].fillna(df['Rating'].mean())
 df['Goals'] = df['Goals'].fillna(0)
 df['Injury_Start'] = pd.to_datetime(df['Injury_Start'], errors='coerce')
@@ -51,9 +42,6 @@ df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
 df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
 df['Month'] = df['Injury_Start'].dt.month
 
-# -------------------------
-# Sidebar Filters
-# -------------------------
 st.sidebar.header("🔍 Filters")
 filter_club = st.sidebar.multiselect("Club", options=df['Club'].unique(), default=df['Club'].unique())
 filter_player = st.sidebar.multiselect("Player", options=df['Player'].unique(), default=df['Player'].unique())
@@ -65,17 +53,11 @@ filtered_df = df[
     (df['Status'].isin(filter_status))
 ]
 
-# -------------------------
-# KPIs
-# -------------------------
 kpi1, kpi2, kpi3 = st.columns(3)
 kpi1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}")
 kpi2.metric("💥 Avg Performance Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}")
 kpi3.metric("🩹 Total Injuries", f"{len(filtered_df)}")
 
-# -------------------------
-# Tabs for Visualization
-# -------------------------
 tabs = st.tabs(["📊 Trends", "📈 Player Impact", "🔥 Club Analysis"])
 
 # -------- 📊 Trends --------
@@ -120,10 +102,7 @@ with tabs[2]:
     club_injuries = filtered_df.groupby("Club")['Injury_Start'].count().reset_index().rename(columns={"Injury_Start":"Injury_Count"})
     fig5 = px.bar(club_injuries, x="Club", y="Injury_Count", color="Injury_Count", color_continuous_scale="Viridis")
     st.plotly_chart(fig5, use_container_width=True)
-
-# -------------------------
-# Download Filtered Data
-# -------------------------
+    
 st.download_button(
     label="📥 Download Filtered Data",
     data=filtered_df.to_csv(index=False),
