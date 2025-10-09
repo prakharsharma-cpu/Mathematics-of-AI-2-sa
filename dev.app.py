@@ -114,6 +114,26 @@ with tabs[2]:
                   title="Total Recorded Injuries per Club")
     st.plotly_chart(fig5, use_container_width=True)
 
+    # --- NEW FEATURE ADDED HERE ---
+    st.subheader("Which Clubs Suffer the Most from Player Injuries?")
+    club_suffering = (
+        filtered_df.groupby("Club")['Team_Performance_Drop']
+        .mean()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    fig_suffering = px.bar(
+        club_suffering,
+        x="Club",
+        y="Team_Performance_Drop",
+        title="Average Team Goal Drop When Players are Injured",
+        color="Team_Performance_Drop",
+        color_continuous_scale="OrRd",
+        labels={"Team_Performance_Drop": "Avg. Goal Drop per Injury"}
+    )
+    st.plotly_chart(fig_suffering, use_container_width=True)
+
+
 # -------- NEW FEATURE: 🔎 Player Deep Dive --------
 with tabs[3]:
     st.subheader("🔎 Single Player Deep Dive")
