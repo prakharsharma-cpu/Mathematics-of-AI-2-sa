@@ -1,6 +1,6 @@
-# ========================================================
-# ⚽ Player Injury Impact Dashboard (Interactive Streamlit)
-# ========================================================
+# ==================================
+# ⚽ Player Injury Impact Dashboard 
+# ==================================
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -10,11 +10,12 @@ st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide
 st.title("⚽ Player Injury Impact Dashboard")
 st.markdown("Analyze how injuries affect player and team performance interactively!")
 
-# --- Data Simulation (Improved for realistic injury dates) ---
+# --- Data Simulation (Improved with Injury Type) ---
 np.random.seed(42)
 players = [f"Player_{i}" for i in range(1, 21)]
 clubs = [f"Club_{i}" for i in range(1, 6)]
 dates = pd.date_range("2020-01-01", "2022-12-31", freq="15D")
+injury_types = ["Hamstring", "Groin", "ACL", "Ankle", "Calf", "Back"]
 
 injury_starts = np.random.choice(dates, 200)
 injury_durations_days = np.random.randint(7, 90, 200) # Injuries last from 1 week to ~3 months
@@ -29,7 +30,8 @@ data = {
     "Age": np.random.randint(18, 35, 200),
     "Injury_Start": pd.to_datetime(injury_starts),
     "Injury_End": [start + pd.Timedelta(days=duration) for start, duration in zip(injury_starts, injury_durations_days)],
-    "Status": np.random.choice(["Before", "During", "After"], 200)
+    "Status": np.random.choice(["Before", "During", "After"], 200),
+    "Injury_Type": np.random.choice(injury_types, 200) # Added Injury Type
 }
 
 df = pd.DataFrame(data)
@@ -53,12 +55,14 @@ df['Month'] = df['Injury_Start'].dt.month
 st.sidebar.header("🔍 Filters")
 filter_club = st.sidebar.multiselect("Club", options=df['Club'].unique(), default=df['Club'].unique())
 filter_player = st.sidebar.multiselect("Player", options=df['Player'].unique(), default=df['Player'].unique())
-filter_status = st.sidebar.multiselect("Status", options=df['Status'].unique(), default=df['Status'].unique())
+# Added a filter for injury type
+filter_injury = st.sidebar.multiselect("Injury Type", options=df['Injury_Type'].unique(), default=df['Injury_Type'].unique())
+
 
 filtered_df = df[
     (df['Club'].isin(filter_club)) &
     (df['Player'].isin(filter_player)) &
-    (df['Status'].isin(filter_status))
+    (df['Injury_Type'].isin(filter_injury))
 ]
 
 kpi1, kpi2, kpi3 = st.columns(3)
@@ -66,8 +70,8 @@ kpi1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}")
 kpi2.metric("💥 Avg Team Performance Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}")
 kpi3.metric("🩹 Total Injuries Recorded", f"{len(filtered_df)}")
 
-# --- TABS: Added "Player Deep Dive" ---
-tabs = st.tabs(["📊 Trends", "📈 Player Impact", "🔥 Club Analysis", "🔎 Player Deep Dive"])
+# --- TABS: Added "Injury Analysis" ---
+tabs = st.tabs(["📊 Trends", "📈 Player Impact", "🔥 Club Analysis", "🔬 Injury Analysis", "🔎 Player Deep Dive"])
 
 # -------- 📊 Trends --------
 with tabs[0]:
@@ -114,7 +118,6 @@ with tabs[2]:
                   title="Total Recorded Injuries per Club")
     st.plotly_chart(fig5, use_container_width=True)
 
-    # --- NEW FEATURE ADDED HERE ---
     st.subheader("Which Clubs Suffer the Most from Player Injuries?")
     club_suffering = (
         filtered_df.groupby("Club")['Team_Performance_Drop']
@@ -133,30 +136,55 @@ with tabs[2]:
     )
     st.plotly_chart(fig_suffering, use_container_width=True)
 
-
-# -------- NEW FEATURE: 🔎 Player Deep Dive --------
+# -------- NEW TAB: 🔬 Injury Analysis --------
 with tabs[3]:
+    st.subheader("Analysis by Injury Type")
+    
+    # Bar chart for injury frequency
+    injury_counts = filtered_df['Injury_Type'].value_counts().reset_index()
+    injury_counts.columns = ['Injury_Type', 'Count']
+    fig_injury_counts = px.bar(
+        injury_counts.sort_values('Count', ascending=False),
+        x='Injury_Type',
+        y='Count',
+        color='Count',
+        color_continuous_scale='Plasma',
+        title='Most Common Injury Types'
+    )
+    st.plotly_chart(fig_injury_counts, use_container_width=True)
+    
+    # Box plot for team performance drop by injury type
+    fig_injury_impact = px.box(
+        filtered_df,
+        x='Injury_Type',
+        y='Team_Performance_Drop',
+        color='Injury_Type',
+        title='Team Performance Drop by Injury Type',
+        labels={'Team_Performance_Drop': 'Team Goal Drop'}
+    )
+    st.plotly_chart(fig_injury_impact, use_container_width=True)
+
+
+# -------- 🔎 Player Deep Dive --------
+with tabs[4]:
     st.subheader("🔎 Single Player Deep Dive")
-    # Use the original df for the selectbox to ensure all players are available for selection
     player_to_analyze = st.selectbox("Select a Player to Analyze", options=sorted(df['Player'].unique()))
 
     if player_to_analyze:
-        # Use the globally filtered_df to respect the sidebar filters
         player_df = filtered_df[filtered_df['Player'] == player_to_analyze].copy()
         st.markdown(f"### Analytics for: **{player_to_analyze}**")
 
         if not player_df.empty:
-            # Player-specific KPIs
             kpi4, kpi5, kpi6 = st.columns(3)
             kpi4.metric("⚽ Average Rating", f"{player_df['Rating'].mean():.2f}")
             kpi5.metric("🩹 Total Injuries", f"{len(player_df)}")
             kpi6.metric("⏳ Avg. Injury Duration (Days)", f"{player_df['Injury_Duration'].mean():.1f}")
 
-            # Player Injury History Table
             st.subheader("Injury History")
             display_cols = {
                 'Injury_Start': 'From',
                 'Injury_End': 'To',
+                'Injury_Type': 'Injury',
                 'Injury_Duration': 'Duration (Days)',
                 'Team_Performance_Drop': 'Team Goal Drop'
             }
@@ -165,7 +193,6 @@ with tabs[3]:
                 use_container_width=True
             )
 
-            # Player Performance Chart
             st.subheader("Performance Timeline")
             fig_player = px.line(player_df.sort_values(by='Injury_Start'),
                                  x="Injury_Start", y="Rating",
@@ -183,3 +210,4 @@ st.download_button(
     file_name="filtered_injury_impact_data.csv",
     mime="text/csv"
 )
+
