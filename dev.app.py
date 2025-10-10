@@ -1,17 +1,16 @@
 # ==================================
-# ⚽ Player Injury Impact Dashboard
+# ⚽ Player Injury Impact Dashboard 
 # ==================================
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# --- Page Config ---
 st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide")
 st.title("⚽ Player Injury Impact Dashboard")
 st.markdown("Analyze how injuries affect player and team performance interactively!")
 
-# --- Data Simulation ---
+# --- Data Simulation (Improved with Injury Type) ---
 np.random.seed(42)
 players = [f"Player_{i}" for i in range(1, 21)]
 clubs = [f"Club_{i}" for i in range(1, 6)]
@@ -19,7 +18,7 @@ dates = pd.date_range("2020-01-01", "2022-12-31", freq="15D")
 injury_types = ["Hamstring", "Groin", "ACL", "Ankle", "Calf", "Back"]
 
 injury_starts = np.random.choice(dates, 200)
-injury_durations_days = np.random.randint(7, 90, 200)
+injury_durations_days = np.random.randint(7, 90, 200)  # 1 week to ~3 months
 
 data = {
     "Player": np.random.choice(players, 200),
@@ -46,7 +45,6 @@ df['Injury_Duration'] = df['Injury_Duration'].apply(lambda x: x if x > 0 else 0)
 
 df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
 df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
-df['Team_Goals_After'] = df['Team_Goals_During'] + np.random.randint(-5, 6, size=len(df))  # Simulated after
 df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
 df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
 df['Month'] = df['Injury_Start'].dt.month
@@ -88,8 +86,18 @@ with tabs[0]:
     
     with st.expander("📈 Statistical Summary and Correlation"):
         st.dataframe(df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].describe())
-        st.write("Correlation Matrix:")
-        st.dataframe(df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].corr().style.background_gradient(cmap='coolwarm'))
+
+        # Streamlit-safe correlation heatmap instead of .style.background_gradient()
+        st.write("Correlation Heatmap:")
+        corr = df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].corr()
+        fig_corr = px.imshow(
+            corr,
+            text_auto=True,
+            color_continuous_scale='RdBu_r',
+            title='Correlation Matrix',
+            labels=dict(x="Metric", y="Metric", color="Correlation")
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
 
 # -------- 📊 Trends --------
 with tabs[1]:
@@ -221,38 +229,13 @@ with tabs[5]:
                 use_container_width=True
             )
 
-            # --- Dynamic Before-During-After Chart ---
-            st.subheader("📈 Player Rating vs Team Goals: Before-During-After")
-            plot_df = player_df.melt(
-                id_vars=['Injury_Start'], 
-                value_vars=['Avg_Rating_Before', 'Rating', 'Avg_Rating_After',
-                            'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After'],
-                var_name='Metric', value_name='Value'
-            )
-            label_mapping = {
-                'Avg_Rating_Before': 'Player Rating - Before',
-                'Rating': 'Player Rating - During',
-                'Avg_Rating_After': 'Player Rating - After',
-                'Team_Goals_Before': 'Team Goals - Before',
-                'Team_Goals_During': 'Team Goals - During',
-                'Team_Goals_After': 'Team Goals - After'
-            }
-            plot_df['Metric'] = plot_df['Metric'].map(label_mapping)
-            fig_dynamic = px.line(
-                plot_df, 
-                x='Injury_Start', 
-                y='Value', 
-                color='Metric', 
-                markers=True,
-                title=f"{player_to_analyze} Rating vs Team Goals Over Injury Phases",
-                hover_data={'Value': ':.2f', 'Injury_Start': True, 'Metric': True},
-                labels={'Value': 'Value', 'Injury_Start': 'Injury Start Date'}
-            )
-            fig_dynamic.update_traces(
-                hovertemplate="<b>%{text}</b><br>Date: %{x|%d-%b-%Y}<br>Value: %{y:.2f}",
-                text=plot_df['Metric']
-            )
-            st.plotly_chart(fig_dynamic, use_container_width=True)
+            st.subheader("Performance Timeline")
+            fig_player = px.line(player_df.sort_values(by='Injury_Start'),
+                                 x="Injury_Start", y="Rating",
+                                 title=f"Rating Over Time for {player_to_analyze}",
+                                 markers=True, text="Rating")
+            fig_player.update_traces(texttemplate='%{text:.2f}', textposition='top center')
+            st.plotly_chart(fig_player, use_container_width=True)
         else:
             st.warning(f"No data available for **{player_to_analyze}** with the current sidebar filters applied.")
 
