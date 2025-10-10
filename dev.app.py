@@ -1,5 +1,5 @@
 # ==================================
-# ⚽ FootLens — Hybrid Elite Player Injury Dashboard 
+# ⚽ FootLens — Ultra Elite Player Injury Impact & Prediction Dashboard (Final Unified Version)
 # ==================================
 import streamlit as st
 import pandas as pd
@@ -13,13 +13,15 @@ from sklearn.metrics.pairwise import cosine_similarity
 from io import BytesIO
 import zipfile
 
-# Streamlit Configuration
-st.set_page_config(page_title="⚽ FootLens — Hybrid Elite Dashboard", layout="wide")
-st.title("⚽ FootLens — Hybrid Elite Player Injury Dashboard")
-st.markdown("Analyze, Predict, and Compare Player Injuries with Pro-Level Insights!")
+# ---------------------------------------------
+# Streamlit Page Configuration
+# ---------------------------------------------
+st.set_page_config(page_title="⚽ FootLens — Ultra Elite Dashboard", layout="wide")
+st.title("⚽ FootLens — Ultra Elite Player Injury Impact & Prediction Dashboard")
+st.markdown("Analyze, Predict, and Compare Player Injuries, Performance, and Recovery with Professional Insights!")
 
 # ---------------------------------------------
-# Data Simulation 
+# Data Simulation & Cleaning
 # ---------------------------------------------
 @st.cache_data
 def generate_data():
@@ -48,8 +50,10 @@ def generate_data():
 
     df = pd.DataFrame(data)
     df.drop_duplicates(inplace=True)
-    df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days
-    df['Injury_Duration'] = df['Injury_Duration'].clip(lower=1)
+    df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days.clip(lower=1)
+    df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
+    df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
+    df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
     df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
     df['Impact_Index'] = df['Team_Performance_Drop'] / df['Injury_Duration']
     df['Severity_Score'] = df['Injury_Duration'] * (10 - df['Rating']) / 10
@@ -64,14 +68,10 @@ df = generate_data()
 st.sidebar.header("🔍 Filters")
 mode = st.sidebar.radio("Dashboard Mode", ["Executive", "Analyst"], index=0)
 filter_club = st.sidebar.multiselect("Club", df['Club'].unique(), default=df['Club'].unique())
-filter_injury = st.sidebar.multiselect("Injury Type", df['Injury_Type'].unique(), default=df['Injury_Type'].unique())
 filter_player = st.sidebar.multiselect("Player", df['Player'].unique(), default=df['Player'].unique())
+filter_injury = st.sidebar.multiselect("Injury Type", df['Injury_Type'].unique(), default=df['Injury_Type'].unique())
 
-filtered_df = df[
-    (df['Club'].isin(filter_club)) &
-    (df['Player'].isin(filter_player)) &
-    (df['Injury_Type'].isin(filter_injury))
-]
+filtered_df = df[(df['Club'].isin(filter_club)) & (df['Player'].isin(filter_player)) & (df['Injury_Type'].isin(filter_injury))]
 
 # ---------------------------------------------
 # KPIs
@@ -85,92 +85,106 @@ kpi4.metric("🔥 Avg Severity", f"{filtered_df['Severity_Score'].mean():.2f}")
 # ---------------------------------------------
 # Tabs
 # ---------------------------------------------
-tabs = st.tabs(["📊 Overview", "📈 Club & Trends", "🧠 Prediction", "🧩 Similarity", "🔎 Deep Dive"])
+tabs = st.tabs([
+    "🧾 Dataset Overview", 
+    "📊 Trends & Club Impact", 
+    "📈 Player Performance & Comeback", 
+    "🧠 Prediction & Similarity", 
+    "🔎 Player Deep Dive"
+])
 
-# -------- 📊 Overview --------
+# -------- 🧾 Dataset Overview --------
 with tabs[0]:
     st.subheader("📄 Dataset Overview")
     st.dataframe(filtered_df.head(), use_container_width=True)
-    st.write(f"**Records:** {len(filtered_df)} | **Clubs:** {filtered_df['Club'].nunique()} | **Players:** {filtered_df['Player'].nunique()}")
 
-    with st.expander("Correlation Heatmap"):
-        corr = filtered_df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration', 'Severity_Score']].corr()
+    with st.expander("📊 Summary Stats & Correlation"):
+        st.dataframe(df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].describe())
+        corr = df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration', 'Severity_Score']].corr()
         fig, ax = plt.subplots(figsize=(6, 5))
         sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f", ax=ax)
         st.pyplot(fig)
 
-# -------- 📈 Club & Trends --------
+# -------- 📊 Trends & Club Impact --------
 with tabs[1]:
-    st.subheader("Monthly Injury Distribution by Club")
-    club_month = filtered_df.groupby(['Club', 'Month']).size().reset_index(name='Count')
-    fig = px.density_heatmap(club_month, x='Month', y='Club', z='Count', color_continuous_scale='Viridis')
-    st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Top 10 Players with Highest Team Impact")
+    impact = filtered_df.groupby('Player')['Team_Performance_Drop'].mean().sort_values(ascending=False).head(10).reset_index()
+    fig1 = px.bar(impact, x='Team_Performance_Drop', y='Player', orientation='h', color='Team_Performance_Drop', color_continuous_scale='Reds')
+    st.plotly_chart(fig1, use_container_width=True)
 
-    st.subheader("Top 10 Impact Players")
-    top_impact = filtered_df.groupby('Player')['Team_Performance_Drop'].mean().sort_values(ascending=False).head(10).reset_index()
-    fig2 = px.bar(top_impact, x='Team_Performance_Drop', y='Player', orientation='h', color='Team_Performance_Drop', color_continuous_scale='Reds')
-    st.plotly_chart(fig2, use_container_width=True)
+    st.subheader("📆 Monthly Injury Trend")
+    monthly_trend = df.groupby('Month').size().reset_index(name='Injury_Count')
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(monthly_trend['Month'], monthly_trend['Injury_Count'], marker='o', color='blue')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Number of Injuries')
+    ax.set_title('Monthly Injury Trend')
+    st.pyplot(fig)
 
-# -------- 🧠 Prediction --------
+    st.subheader("Club Injury Heatmap")
+    heatmap_data = filtered_df.groupby(['Club', 'Month']).size().reset_index(name='Count')
+    fig4 = px.density_heatmap(heatmap_data, x='Month', y='Club', z='Count', color_continuous_scale='Blues')
+    st.plotly_chart(fig4, use_container_width=True)
+
+# -------- 📈 Player Performance & Comeback --------
 with tabs[2]:
-    st.subheader("Injury Recurrence Risk Model (Demo)")
-    model_data = filtered_df[['Age', 'Rating', 'Injury_Duration', 'Severity_Score']].copy()
-    model_data = model_data.dropna()
-    y = np.random.choice([0, 1], len(model_data))  # Simulated target
-    X = StandardScaler().fit_transform(model_data)
+    st.subheader("Comeback Players Leaderboard (Rating Change Post-Injury)")
+    leaderboard = filtered_df.groupby('Player')['Performance_Change'].mean().sort_values(ascending=False).head(10).reset_index()
+    st.dataframe(leaderboard, use_container_width=True)
 
+    st.subheader("Player Age vs Team Performance Drop")
+    fig3 = px.scatter(filtered_df, x='Age', y='Team_Performance_Drop', color='Club', hover_data=['Player'])
+    st.plotly_chart(fig3, use_container_width=True)
+
+    st.subheader("Average Rating Before, During, After Injury")
+    status_avg = filtered_df.groupby('Status')['Rating'].mean().reset_index()
+    fig_status = px.bar(status_avg, x='Status', y='Rating', color='Status', color_discrete_sequence=px.colors.qualitative.Bold)
+    st.plotly_chart(fig_status, use_container_width=True)
+
+# -------- 🧠 Prediction & Similarity --------
+with tabs[3]:
+    st.subheader("Injury Recurrence Prediction (Demo)")
+    model_data = filtered_df[['Age', 'Rating', 'Injury_Duration', 'Severity_Score']].dropna()
+    y = np.random.choice([0, 1], len(model_data))
+    X = StandardScaler().fit_transform(model_data)
     clf = RandomForestClassifier(n_estimators=50, random_state=42)
     clf.fit(X, y)
     preds = clf.predict_proba(X)[:, 1]
     filtered_df.loc[model_data.index, 'Recurrence_Prob'] = preds
+    fig_pred = px.scatter(filtered_df, x='Severity_Score', y='Recurrence_Prob', color='Club', hover_data=['Player'])
+    st.plotly_chart(fig_pred, use_container_width=True)
 
-    fig3 = px.scatter(filtered_df, x='Severity_Score', y='Recurrence_Prob', color='Club', hover_data=['Player'], title='Predicted Recurrence Probability')
-    st.plotly_chart(fig3, use_container_width=True)
-
-# -------- 🧩 Similarity --------
-with tabs[3]:
     st.subheader("Player Similarity Engine")
     features = ['Age', 'Rating', 'Severity_Score', 'Injury_Duration']
-    feature_data = filtered_df[features].dropna()
-    sim_matrix = cosine_similarity(StandardScaler().fit_transform(feature_data))
+    sim_data = filtered_df[features].dropna()
+    sim_matrix = cosine_similarity(StandardScaler().fit_transform(sim_data))
+    player_select = st.selectbox('Select a Player for Similarity', options=filtered_df['Player'].unique())
+    if player_select in filtered_df['Player'].values:
+        idx = filtered_df[filtered_df['Player'] == player_select].index[0]
+        sims = sim_matrix[idx]
+        sim_df = pd.DataFrame({'Player': filtered_df.iloc[:len(sims)]['Player'], 'Similarity': sims})
+        st.dataframe(sim_df.sort_values('Similarity', ascending=False).head(5))
 
-    player_choice = st.selectbox("Select a Player", options=filtered_df['Player'].unique())
-    if player_choice in filtered_df['Player'].values:
-        p_idx = filtered_df[filtered_df['Player'] == player_choice].index[0]
-        similarities = sim_matrix[p_idx]
-        sim_df = pd.DataFrame({
-            'Player': filtered_df.iloc[:len(similarities)]['Player'],
-            'Similarity': similarities
-        }).sort_values('Similarity', ascending=False).head(6)
-        st.dataframe(sim_df)
-
-# -------- 🔎 Deep Dive --------
+# -------- 🔎 Player Deep Dive --------
 with tabs[4]:
-    st.subheader("Deep Dive — Player Performance and Recovery")
-    player_select = st.selectbox("Select Player", options=filtered_df['Player'].unique())
-    player_df = filtered_df[filtered_df['Player'] == player_select]
-
+    st.subheader("Player Deep Dive — Full Recovery Analysis")
+    player_analyze = st.selectbox('Select Player to Analyze', options=sorted(df['Player'].unique()))
+    player_df = filtered_df[filtered_df['Player'] == player_analyze]
     if not player_df.empty:
         kpiA, kpiB, kpiC = st.columns(3)
-        kpiA.metric("⚽ Avg Rating", f"{player_df['Rating'].mean():.2f}")
-        kpiB.metric("🩹 Avg Duration", f"{player_df['Injury_Duration'].mean():.1f} days")
-        kpiC.metric("🔥 Avg Severity", f"{player_df['Severity_Score'].mean():.2f}")
-
-        fig4 = px.line(player_df, x='Injury_Start', y='Rating', title='Performance Over Time', markers=True)
-        st.plotly_chart(fig4, use_container_width=True)
+        kpiA.metric('⚽ Average Rating', f"{player_df['Rating'].mean():.2f}")
+        kpiB.metric('🩹 Injury Count', f"{len(player_df)}")
+        kpiC.metric('⏳ Avg Duration (Days)', f"{player_df['Injury_Duration'].mean():.1f}")
+        fig5 = px.line(player_df, x='Injury_Start', y='Rating', title='Performance Over Time', markers=True)
+        st.plotly_chart(fig5, use_container_width=True)
 
 # ---------------------------------------------
-# Export Feature
+# Export Functionality
 # ---------------------------------------------
-with st.expander("📦 Export Filtered Results"):
+with st.expander("📦 Export Filtered Data"):
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, 'w') as zf:
         zf.writestr('filtered_data.csv', filtered_df.to_csv(index=False))
-    st.download_button(
-        label="📥 Download Filtered Data as ZIP",
-        data=buffer.getvalue(),
-        file_name="footlens_filtered_export.zip",
-        mime="application/zip"
-    )
+    st.download_button(label='📥 Download Filtered Dataset (ZIP)', data=buffer.getvalue(), file_name='footlens_export.zip', mime='application/zip')
 
-st.markdown("<hr><center>© 2025 FootLens Analytics | Streamlit Hybrid Edition</center>", unsafe_allow_html=True)
+st.markdown("<hr><center>© 2025 FootLens Analytics | Unified Hybrid Elite Version</center>", unsafe_allow_html=True)
