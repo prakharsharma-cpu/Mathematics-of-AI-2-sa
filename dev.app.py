@@ -1,16 +1,17 @@
 # ==================================
-# ⚽ Player Injury Impact Dashboard 
+# ⚽ Player Injury Impact Dashboard
 # ==================================
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
+# --- Page Config ---
 st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide")
 st.title("⚽ Player Injury Impact Dashboard")
 st.markdown("Analyze how injuries affect player and team performance interactively!")
 
-# --- Data Simulation (Improved with Injury Type) ---
+# --- Data Simulation ---
 np.random.seed(42)
 players = [f"Player_{i}" for i in range(1, 21)]
 clubs = [f"Club_{i}" for i in range(1, 6)]
@@ -18,7 +19,7 @@ dates = pd.date_range("2020-01-01", "2022-12-31", freq="15D")
 injury_types = ["Hamstring", "Groin", "ACL", "Ankle", "Calf", "Back"]
 
 injury_starts = np.random.choice(dates, 200)
-injury_durations_days = np.random.randint(7, 90, 200)  # 1 week to ~3 months
+injury_durations_days = np.random.randint(7, 90, 200)
 
 data = {
     "Player": np.random.choice(players, 200),
@@ -27,7 +28,6 @@ data = {
     "Goals": np.random.randint(0, 5, 200),
     "Team_Goals_Before": np.random.randint(10, 30, 200),
     "Team_Goals_During": np.random.randint(5, 25, 200),
-    "Team_Goals_After": np.random.randint(10, 30, 200),
     "Age": np.random.randint(18, 35, 200),
     "Injury_Start": pd.to_datetime(injury_starts),
     "Injury_End": [start + pd.Timedelta(days=duration) for start, duration in zip(injury_starts, injury_durations_days)],
@@ -46,11 +46,11 @@ df['Injury_Duration'] = df['Injury_Duration'].apply(lambda x: x if x > 0 else 0)
 
 df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
 df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
+df['Team_Goals_After'] = df['Team_Goals_During'] + np.random.randint(-5, 6, size=len(df))  # Simulated after
 df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
 df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
 df['Month'] = df['Injury_Start'].dt.month
 df['Impact_Index'] = df['Team_Performance_Drop'] / df['Injury_Duration'].replace(0, np.nan)
-df['Team_Recovery'] = df['Team_Goals_After'] - df['Team_Goals_During']
 
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
@@ -136,16 +136,6 @@ with tabs[2]:
                         color_discrete_sequence=px.colors.qualitative.Bold)
     st.plotly_chart(fig_status, use_container_width=True)
 
-    st.subheader("📊 Player Before vs After Injury Performance")
-    player_perf = filtered_df.groupby('Player')[['Avg_Rating_Before', 'Avg_Rating_After']].mean().dropna().reset_index()
-    fig_player_perf = px.bar(player_perf, 
-                             x='Player', 
-                             y=['Avg_Rating_Before', 'Avg_Rating_After'],
-                             barmode='group', 
-                             title='Average Player Rating: Before vs After Injury',
-                             color_discrete_sequence=px.colors.qualitative.Set2)
-    st.plotly_chart(fig_player_perf, use_container_width=True)
-
 # -------- 🔥 Club Analysis --------
 with tabs[3]:
     st.subheader("Injury Frequency by Month and Club")
@@ -160,10 +150,10 @@ with tabs[3]:
                   title="Total Recorded Injuries per Club")
     st.plotly_chart(fig5, use_container_width=True)
 
-    st.subheader("⚽ Team Goals Before vs During vs After Injury Period")
-    team_goals = df.groupby('Club')[['Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After']].mean().reset_index()
-    fig_goals = px.bar(team_goals, x='Club', y=['Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After'],
-                       barmode='group', title='Average Team Goals Before, During and After Injury')
+    st.subheader("⚽ Team Goals Before vs During Injury Period")
+    team_goals = df.groupby('Club')[['Team_Goals_Before', 'Team_Goals_During']].mean().reset_index()
+    fig_goals = px.bar(team_goals, x='Club', y=['Team_Goals_Before', 'Team_Goals_During'],
+                       barmode='group', title='Average Team Goals Before and During Injury Period')
     st.plotly_chart(fig_goals, use_container_width=True)
 
     st.subheader("🏆 Top 5 Clubs by Average Performance Drop")
@@ -224,41 +214,45 @@ with tabs[5]:
                 'Injury_End': 'To',
                 'Injury_Type': 'Injury',
                 'Injury_Duration': 'Duration (Days)',
-                'Team_Performance_Drop': 'Team Goal Drop',
-                'Team_Recovery': 'Team Goal Recovery After'
+                'Team_Performance_Drop': 'Team Goal Drop'
             }
             st.dataframe(
                 player_df[display_cols.keys()].rename(columns=display_cols).sort_values(by='From', ascending=False),
                 use_container_width=True
             )
 
-            st.subheader("Performance Timeline")
-            fig_player = px.line(player_df.sort_values(by='Injury_Start'),
-                                 x="Injury_Start", y="Rating",
-                                 title=f"Rating Over Time for {player_to_analyze}",
-                                 markers=True, text="Rating")
-            fig_player.update_traces(texttemplate='%{text:.2f}', textposition='top center')
-            st.plotly_chart(fig_player, use_container_width=True)
-
-            # --- Player & Club Before/During/After Snapshot ---
-            st.subheader("📊 Player & Club Performance Snapshot")
-            snapshot_cols = ['Player', 'Club', 'Avg_Rating_Before', 'Rating', 'Avg_Rating_After', 
-                             'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After', 'Team_Recovery']
-            st.dataframe(player_df[snapshot_cols].dropna().sort_values(by='Team_Goals_Before', ascending=False), use_container_width=True)
-
-            # --- NEW: Before-During-After Dynamic Chart ---
+            # --- Dynamic Before-During-After Chart ---
             st.subheader("📈 Player Rating vs Team Goals: Before-During-After")
             plot_df = player_df.melt(
                 id_vars=['Injury_Start'], 
-                value_vars=['Avg_Rating_Before', 'Rating', 'Avg_Rating_After', 'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After'],
+                value_vars=['Avg_Rating_Before', 'Rating', 'Avg_Rating_After',
+                            'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After'],
                 var_name='Metric', value_name='Value'
             )
+            label_mapping = {
+                'Avg_Rating_Before': 'Player Rating - Before',
+                'Rating': 'Player Rating - During',
+                'Avg_Rating_After': 'Player Rating - After',
+                'Team_Goals_Before': 'Team Goals - Before',
+                'Team_Goals_During': 'Team Goals - During',
+                'Team_Goals_After': 'Team Goals - After'
+            }
+            plot_df['Metric'] = plot_df['Metric'].map(label_mapping)
             fig_dynamic = px.line(
-                plot_df, x='Injury_Start', y='Value', color='Metric', markers=True,
-                title=f"{player_to_analyze} Rating vs Team Goals Over Injury Phases"
+                plot_df, 
+                x='Injury_Start', 
+                y='Value', 
+                color='Metric', 
+                markers=True,
+                title=f"{player_to_analyze} Rating vs Team Goals Over Injury Phases",
+                hover_data={'Value': ':.2f', 'Injury_Start': True, 'Metric': True},
+                labels={'Value': 'Value', 'Injury_Start': 'Injury Start Date'}
+            )
+            fig_dynamic.update_traces(
+                hovertemplate="<b>%{text}</b><br>Date: %{x|%d-%b-%Y}<br>Value: %{y:.2f}",
+                text=plot_df['Metric']
             )
             st.plotly_chart(fig_dynamic, use_container_width=True)
-
         else:
             st.warning(f"No data available for **{player_to_analyze}** with the current sidebar filters applied.")
 
