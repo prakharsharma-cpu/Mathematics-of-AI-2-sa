@@ -83,11 +83,9 @@ with tabs[0]:
     st.subheader("📄 Dataset Preview and Summary")
     st.dataframe(df.head(), use_container_width=True)
     st.write(f"**Total Records:** {df.shape[0]} | **Columns:** {df.shape[1]}")
-    
+
     with st.expander("📈 Statistical Summary and Correlation"):
         st.dataframe(df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].describe())
-
-        # Streamlit-safe correlation heatmap instead of .style.background_gradient()
         st.write("Correlation Heatmap:")
         corr = df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].corr()
         fig_corr = px.imshow(
