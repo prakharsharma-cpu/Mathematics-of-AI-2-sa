@@ -1,16 +1,18 @@
 # ==================================
-# ⚽ Player Injury Impact Dashboard 
+# ⚽ Player Injury Impact Dashboard (Plotly + Matplotlib)
 # ==================================
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide")
 st.title("⚽ Player Injury Impact Dashboard")
 st.markdown("Analyze how injuries affect player and team performance interactively!")
 
-# --- Data Simulation (Improved with Injury Type) ---
+# --- Data Simulation (with Injury Type) ---
 np.random.seed(42)
 players = [f"Player_{i}" for i in range(1, 21)]
 clubs = [f"Club_{i}" for i in range(1, 6)]
@@ -18,7 +20,7 @@ dates = pd.date_range("2020-01-01", "2022-12-31", freq="15D")
 injury_types = ["Hamstring", "Groin", "ACL", "Ankle", "Calf", "Back"]
 
 injury_starts = np.random.choice(dates, 200)
-injury_durations_days = np.random.randint(7, 90, 200)  # 1 week to ~3 months
+injury_durations_days = np.random.randint(7, 90, 200)
 
 data = {
     "Player": np.random.choice(players, 200),
@@ -86,16 +88,13 @@ with tabs[0]:
 
     with st.expander("📈 Statistical Summary and Correlation"):
         st.dataframe(df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].describe())
-        st.write("Correlation Heatmap:")
+        st.write("Correlation Heatmap (Matplotlib + Seaborn):")
+        
+        # Matplotlib Heatmap
         corr = df[['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']].corr()
-        fig_corr = px.imshow(
-            corr,
-            text_auto=True,
-            color_continuous_scale='RdBu_r',
-            title='Correlation Matrix',
-            labels=dict(x="Metric", y="Metric", color="Correlation")
-        )
-        st.plotly_chart(fig_corr, use_container_width=True)
+        fig, ax = plt.subplots(figsize=(6, 5))
+        sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f", ax=ax)
+        st.pyplot(fig)
 
 # -------- 📊 Trends --------
 with tabs[1]:
@@ -115,11 +114,14 @@ with tabs[1]:
                    title="Rating Fluctuation Around Injuries")
     st.plotly_chart(fig2, use_container_width=True)
 
-    st.subheader("📆 Monthly Injury Trend")
+    st.subheader("📆 Monthly Injury Trend (Matplotlib)")
     monthly_trend = df.groupby('Month').size().reset_index(name='Injury_Count')
-    fig_trend = px.line(monthly_trend, x='Month', y='Injury_Count', markers=True,
-                        title='Injury Frequency Over the Season')
-    st.plotly_chart(fig_trend, use_container_width=True)
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(monthly_trend['Month'], monthly_trend['Injury_Count'], marker='o', color='blue')
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Number of Injuries")
+    ax.set_title("Monthly Injury Trend")
+    st.pyplot(fig)
 
 # -------- 📈 Player Impact --------
 with tabs[2]:
@@ -150,101 +152,36 @@ with tabs[3]:
                               color_continuous_scale="Blues", title="When Do Injuries Occur During the Season?")
     st.plotly_chart(fig4, use_container_width=True)
 
-    st.subheader("Club-wise Injury Counts")
-    club_injuries = filtered_df.groupby("Club")['Injury_Start'].count().reset_index().rename(columns={"Injury_Start":"Injury_Count"})
-    fig5 = px.bar(club_injuries, x="Club", y="Injury_Count", color="Injury_Count", color_continuous_scale="Viridis",
-                  title="Total Recorded Injuries per Club")
-    st.plotly_chart(fig5, use_container_width=True)
-
-    st.subheader("⚽ Team Goals Before vs During Injury Period")
-    team_goals = df.groupby('Club')[['Team_Goals_Before', 'Team_Goals_During']].mean().reset_index()
-    fig_goals = px.bar(team_goals, x='Club', y=['Team_Goals_Before', 'Team_Goals_During'],
-                       barmode='group', title='Average Team Goals Before and During Injury Period')
-    st.plotly_chart(fig_goals, use_container_width=True)
-
-    st.subheader("🏆 Top 5 Clubs by Average Performance Drop")
-    top_clubs = (
-        filtered_df.groupby('Club')['Team_Performance_Drop']
-        .mean()
-        .sort_values(ascending=False)
-        .head(5)
-        .reset_index()
-    )
-    st.dataframe(top_clubs, use_container_width=True)
-
 # -------- 🔬 Injury Analysis --------
 with tabs[4]:
     st.subheader("Analysis by Injury Type")
+    
+    # Matplotlib Boxplot for injury impact
+    fig, ax = plt.subplots(figsize=(8, 4))
+    sns.boxplot(data=filtered_df, x='Injury_Type', y='Team_Performance_Drop', palette="Set2", ax=ax)
+    ax.set_title("Team Performance Drop by Injury Type")
+    st.pyplot(fig)
+    
+    # Plotly for counts
     injury_counts = filtered_df['Injury_Type'].value_counts().reset_index()
     injury_counts.columns = ['Injury_Type', 'Count']
-    fig_injury_counts = px.bar(
-        injury_counts.sort_values('Count', ascending=False),
-        x='Injury_Type', y='Count', color='Count',
-        color_continuous_scale='Plasma', title='Most Common Injury Types'
-    )
+    fig_injury_counts = px.bar(injury_counts.sort_values('Count', ascending=False),
+                               x='Injury_Type', y='Count', color='Count',
+                               color_continuous_scale='Plasma', title='Most Common Injury Types')
     st.plotly_chart(fig_injury_counts, use_container_width=True)
-    
-    fig_injury_impact = px.box(
-        filtered_df,
-        x='Injury_Type', y='Team_Performance_Drop', color='Injury_Type',
-        title='Team Performance Drop by Injury Type',
-        labels={'Team_Performance_Drop': 'Team Goal Drop'}
-    )
-    st.plotly_chart(fig_injury_impact, use_container_width=True)
-
-    st.subheader("📊 Injury Impact Index by Injury Type")
-    impact_df = df.groupby('Injury_Type')['Impact_Index'].mean().reset_index()
-    fig_impact = px.bar(impact_df, x='Injury_Type', y='Impact_Index',
-                        color='Impact_Index', color_continuous_scale='Inferno',
-                        title='Average Impact Index (Performance Drop ÷ Injury Duration)')
-    st.plotly_chart(fig_impact, use_container_width=True)
 
 # -------- 🔎 Player Deep Dive --------
 with tabs[5]:
     st.subheader("🔎 Single Player Deep Dive")
     player_to_analyze = st.selectbox("Select a Player to Analyze", options=sorted(df['Player'].unique()))
-
     if player_to_analyze:
         player_df = filtered_df[filtered_df['Player'] == player_to_analyze].copy()
         st.markdown(f"### Analytics for: **{player_to_analyze}**")
-
         if not player_df.empty:
             kpi4, kpi5, kpi6 = st.columns(3)
             kpi4.metric("⚽ Average Rating", f"{player_df['Rating'].mean():.2f}")
             kpi5.metric("🩹 Total Injuries", f"{len(player_df)}")
             kpi6.metric("⏳ Avg. Injury Duration (Days)", f"{player_df['Injury_Duration'].mean():.1f}")
-
-            st.subheader("Injury History")
-            display_cols = {
-                'Injury_Start': 'From',
-                'Injury_End': 'To',
-                'Injury_Type': 'Injury',
-                'Injury_Duration': 'Duration (Days)',
-                'Team_Performance_Drop': 'Team Goal Drop'
-            }
-            st.dataframe(
-                player_df[display_cols.keys()].rename(columns=display_cols).sort_values(by='From', ascending=False),
-                use_container_width=True
-            )
-
-            st.subheader("Performance Timeline")
-            fig_player = px.line(player_df.sort_values(by='Injury_Start'),
-                                 x="Injury_Start", y="Rating",
-                                 title=f"Rating Over Time for {player_to_analyze}",
-                                 markers=True, text="Rating")
-            fig_player.update_traces(texttemplate='%{text:.2f}', textposition='top center')
-            st.plotly_chart(fig_player, use_container_width=True)
-        else:
-            st.warning(f"No data available for **{player_to_analyze}** with the current sidebar filters applied.")
-
-# --- About Section ---
-with st.expander("ℹ️ About This Dashboard"):
-    st.markdown("""
-    This dashboard helps sports analysts and club managers visualize 
-    how player injuries affect team goals, player performance, and overall club statistics.
-    Explore various tabs for trends, comparisons, and detailed analysis by player or injury type.
-    Use sidebar filters to narrow down results and download the dataset.
-    """)
 
 # --- Download Button ---
 st.download_button(
