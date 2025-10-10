@@ -1,5 +1,5 @@
 # ==================================
-# ⚽ FootLens — Ultimate Elite Player Injury Dashboard with 20+ Advanced Features
+# ⚽ FootLens — Ultimate Elite Player Injury Dashboard with Full Features
 # ==================================
 import streamlit as st
 import pandas as pd
@@ -52,6 +52,7 @@ def load_data(uploaded_file=None):
             "Injury_Type": np.random.choice(injury_types,300)
         }
         df = pd.DataFrame(data)
+
     df.drop_duplicates(inplace=True)
     df['Injury_Duration'] = (df['Injury_End']-df['Injury_Start']).dt.days.clip(lower=1)
     df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
@@ -61,8 +62,9 @@ def load_data(uploaded_file=None):
     df['Impact_Index'] = df['Team_Performance_Drop']/df['Injury_Duration']
     df['Severity_Score'] = df['Injury_Duration']*(10-df['Rating'])/10
     df['Month'] = df['Injury_Start'].dt.month
-    # 20+ Advanced Features
-    df['ERI'] = df['Severity_Score'] / df['Injury_Duration']  # Expected Recovery Index
+
+    # --- 20+ Advanced Features ---
+    df['ERI'] = df['Severity_Score']/df['Injury_Duration']  # Expected Recovery Index
     df['Recurrence_180d'] = np.random.randint(0,2,len(df))
     df['Club_Resilience'] = df.groupby('Club')['Impact_Index'].transform('mean')
     df['Goals_Lost'] = df['Team_Goals_Before']-df['Goals']
@@ -78,6 +80,11 @@ def load_data(uploaded_file=None):
     df['Cumulative_Injury_Duration'] = df.groupby('Player')['Injury_Duration'].cumsum()
     df['Recent_Injury'] = (df['Injury_Start'] > pd.Timestamp('2022-01-01'))
     df['Impact_Per_Goal'] = df['Impact_Index']/df['Goals'].replace(0,1)
+    df['Normalized_Impact'] = (df['Impact_Index']-df['Impact_Index'].min())/(df['Impact_Index'].max()-df['Impact_Index'].min())
+    df['Rating_Per_Day'] = df['Rating']/df['Injury_Duration']
+    df['Goal_Contribution'] = df['Goals']/df['Team_Goals_Before']
+    df['Weighted_Impact'] = df['Impact_Index']*df['Severity_Score']
+
     return df
 
 # Load Data
@@ -93,15 +100,16 @@ filtered_df = filtered_df[(filtered_df['Club'].isin(filter_club)) & (filtered_df
 # ---------------------------------------------
 # KPIs
 # ---------------------------------------------
-k1,k2,k3,k4,k5 = st.columns(5)
+k1,k2,k3,k4,k5,k6 = st.columns(6)
 k1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}")
 k2.metric("💥 Avg Team Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}")
 k3.metric("🩹 Total Injuries", f"{len(filtered_df)}")
 k4.metric("🔥 Avg Severity", f"{filtered_df['Severity_Score'].mean():.2f}")
 k5.metric("📊 Avg Impact Index", f"{filtered_df['Impact_Index'].mean():.2f}")
+k6.metric("📈 Avg Weighted Impact", f"{filtered_df['Weighted_Impact'].mean():.2f}")
 
 # ---------------------------------------------
-# Tabs: Dataset, Trends, Player, Prediction, Deep Dive
+# Tabs
 # ---------------------------------------------
 tabs = st.tabs(["🧾 Dataset Overview","📊 Trends & Club Impact","📈 Player Performance","🧠 Prediction & Similarity","🔎 Deep Dive & Simulation"])
 
@@ -158,26 +166,4 @@ with tabs[3]:
     idx = filtered_df[filtered_df['Player']==player_choice].index[0]
     sim_scores = sim_matrix[idx]
     sim_df = pd.DataFrame({'Player': filtered_df['Player'],'Similarity': sim_scores}).sort_values('Similarity', ascending=False).head(6)
-    st.dataframe(sim_df)
-
-# Deep Dive & Simulation
-with tabs[4]:
-    st.subheader("Player Deep Dive & Recovery Simulation")
-    pd_player = st.selectbox("Select Player", options=filtered_df['Player'].unique())
-    player_df = filtered_df[filtered_df['Player']==pd_player]
-    if not player_df.empty:
-        k1,k2,k3 = st.columns(3)
-        k1.metric("⚽ Avg Rating", f"{player_df['Rating'].mean():.2f}")
-        k2.metric("🩹 Avg Injury Duration", f"{player_df['Injury_Duration'].mean():.1f}d")
-        k3.metric("🔥 Avg Severity", f"{player_df['Severity_Score'].mean():.2f}")
-        fig5 = px.line(player_df, x='Injury_Start', y='Rating', title=f'Performance Timeline: {pd_player}', markers=True)
-        st.plotly_chart(fig5, use_container_width=True)
-
-# Export Button
-with st.expander("📦 Export Filtered Results"):
-    buffer = BytesIO()
-    with zipfile.ZipFile(buffer,'w') as zf:
-        zf.writestr('filtered_data.csv', filtered_df.to_csv(index=False))
-    st.download_button("📥 Download Filtered Data as ZIP", data=buffer.getvalue(), file_name='footlens_filtered_export.zip', mime='application/zip')
-
-st.markdown("<hr><center>© 2025 FootLens Analytics | Ultimate Elite Version</center>", unsafe_allow_html=True)
+    st.dataframe
