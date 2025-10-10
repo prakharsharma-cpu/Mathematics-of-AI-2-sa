@@ -1,23 +1,6 @@
-# Core app framework
-streamlit>=1.37.0
-
-# Data handling and computation
-pandas>=2.1.0
-numpy>=1.25.0
-
-# Visualization libraries
-plotly>=5.22.0
-matplotlib>=3.8.0
-seaborn>=0.13.0
-
-# Machine learning utilities
-scikit-learn>=1.4.0
-
-# Export / file handling
-openpyxl>=3.1.0
-
-# Optional — improves compression & I/O stability
-pyarrow>=15.0.0
-
-# System compatibility
-python-dateutil>=2.9.0
+streamlit
+pandas
+numpy
+plotly
+matplotlib
+seaborn
