@@ -42,57 +42,71 @@ def render_matplotlib(fig):
     st.pyplot(fig)
 
 # ---------------------
-# Data Simulation
+# Data Loading (CSV)
 # ---------------------
-np.random.seed(42)
-players = [f"Player_{i}" for i in range(1, 21)]
-clubs = [f"Club_{i}" for i in range(1, 6)]
-dates = pd.date_range("2020-01-01", "2022-12-31", freq="15D")
-injury_types = ["Hamstring", "Groin", "ACL", "Ankle", "Calf", "Back"]
+st.sidebar.header("📂 Data Source")
+uploaded_file = st.sidebar.file_uploader("Upload Injury Impact CSV", type=["csv"])
 
-injury_starts = np.random.choice(dates, 200)
-injury_durations_days = np.random.randint(7, 90, 200)
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.success("✅ Data loaded successfully from uploaded CSV.")
+else:
+    # Default fallback (your local CSV)
+    default_path = "player_injuries_impact.csv"
+    try:
+        df = pd.read_csv(default_path)
+        st.info(f"ℹ️ Using default dataset: {default_path}")
+    except FileNotFoundError:
+        st.error("❌ No data file found. Please upload a CSV to continue.")
+        st.stop()
 
-data = {
-    "Player": np.random.choice(players, 200),
-    "Club": np.random.choice(clubs, 200),
-    "Rating": np.random.uniform(5, 9, 200),
-    "Goals": np.random.randint(0, 5, 200),
-    "Team_Goals_Before": np.random.randint(10, 30, 200),
-    "Team_Goals_During": np.random.randint(5, 25, 200),
-    "Age": np.random.randint(18, 35, 200),
-    "Injury_Start": pd.to_datetime(injury_starts),
-    "Injury_End": [start + pd.Timedelta(days=duration) for start, duration in zip(injury_starts, injury_durations_days)],
-    "Status": np.random.choice(["Before", "During", "After"], 200),
-    "Injury_Type": np.random.choice(injury_types, 200)
-}
-df = pd.DataFrame(data)
-df['Team_Goals_After'] = df['Team_Goals_During'] + np.random.randint(-3, 6, size=len(df))
+# Ensure date columns are parsed if present
+date_cols = ["Injury_Start", "Injury_End"]
+for col in date_cols:
+    if col in df.columns:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
 
 # ---------------------
 # Derived metrics and cleaning
 # ---------------------
-df.drop_duplicates(inplace=True)
-df['Rating'] = df['Rating'].fillna(df['Rating'].mean())
-df['Goals'] = df['Goals'].fillna(0)
-df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days
-df['Injury_Duration'] = df['Injury_Duration'].apply(lambda x: x if x > 0 else 0)
+if "Injury_End" in df.columns and "Injury_Start" in df.columns:
+    df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days
+    df['Injury_Duration'] = df['Injury_Duration'].apply(lambda x: x if x > 0 else 0)
 
-df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
-df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
-df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
-df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
-df['Month'] = df['Injury_Start'].dt.month
-df['Impact_Index'] = df['Team_Performance_Drop'] / df['Injury_Duration'].replace(0, np.nan)
-df['Team_Recovery'] = df['Team_Goals_After'] - df['Team_Goals_During']
+if 'Team_Performance_Drop' not in df.columns and {'Team_Goals_Before','Team_Goals_During'}.issubset(df.columns):
+    df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
+
+if 'Team_Recovery' not in df.columns and {'Team_Goals_During','Team_Goals_After'}.issubset(df.columns):
+    df['Team_Recovery'] = df['Team_Goals_After'] - df['Team_Goals_During']
+
+if 'Impact_Index' not in df.columns and 'Injury_Duration' in df.columns and 'Team_Performance_Drop' in df.columns:
+    df['Impact_Index'] = df['Team_Performance_Drop'] / df['Injury_Duration'].replace(0, np.nan)
+
+if 'Month' not in df.columns and 'Injury_Start' in df.columns:
+    df['Month'] = df['Injury_Start'].dt.month
+
+# Clean and fill
+df.drop_duplicates(inplace=True)
+if 'Rating' in df.columns:
+    df['Rating'] = df['Rating'].fillna(df['Rating'].mean())
+if 'Goals' in df.columns:
+    df['Goals'] = df['Goals'].fillna(0)
+
+# Compute before/after metrics if columns exist
+if 'Player' in df.columns and 'Rating' in df.columns:
+    df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
+    df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
+if {'Avg_Rating_Before','Avg_Rating_After'}.issubset(df.columns):
+    df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
 
 # ---------------------
 # Sidebar: filters + global mode + global style
 # ---------------------
 st.sidebar.header("🔍 Filters & Visualization Settings")
-filter_club = st.sidebar.multiselect("Club", options=sorted(df['Club'].unique()), default=sorted(df['Club'].unique()))
-filter_player = st.sidebar.multiselect("Player", options=sorted(df['Player'].unique()), default=sorted(df['Player'].unique()))
-filter_injury = st.sidebar.multiselect("Injury Type", options=sorted(df['Injury_Type'].unique()), default=sorted(df['Injury_Type'].unique()))
+
+filter_club = st.sidebar.multiselect("Club", options=sorted(df['Club'].dropna().unique()), default=sorted(df['Club'].dropna().unique()) if 'Club' in df else [])
+filter_player = st.sidebar.multiselect("Player", options=sorted(df['Player'].dropna().unique()), default=sorted(df['Player'].dropna().unique()) if 'Player' in df else [])
+filter_injury = st.sidebar.multiselect("Injury Type", options=sorted(df['Injury_Type'].dropna().unique()), default=sorted(df['Injury_Type'].dropna().unique()) if 'Injury_Type' in df else [])
 
 global_mode = st.sidebar.radio("🧭 Global Visualization Mode", options=["Plotly", "Matplotlib"], index=0)
 st.sidebar.markdown("---")
@@ -101,18 +115,21 @@ global_style = st.sidebar.radio("Global Seaborn Style", options=["Modern Clean",
 st.sidebar.markdown("Tip: select a per-tab override at the top of any tab to override the global mode/style.")
 
 # Apply filters
-filtered_df = df[
-    (df['Club'].isin(filter_club)) &
-    (df['Player'].isin(filter_player)) &
-    (df['Injury_Type'].isin(filter_injury))
-].copy()
+filtered_df = df.copy()
+if not filtered_df.empty:
+    if 'Club' in df.columns and filter_club:
+        filtered_df = filtered_df[filtered_df['Club'].isin(filter_club)]
+    if 'Player' in df.columns and filter_player:
+        filtered_df = filtered_df[filtered_df['Player'].isin(filter_player)]
+    if 'Injury_Type' in df.columns and filter_injury:
+        filtered_df = filtered_df[filtered_df['Injury_Type'].isin(filter_injury)]
 
 # ---------------------
 # KPIs
 # ---------------------
 kpi1, kpi2, kpi3 = st.columns(3)
-kpi1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}")
-kpi2.metric("💥 Avg Team Performance Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}")
+kpi1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}" if 'Rating' in filtered_df else "N/A")
+kpi2.metric("💥 Avg Team Performance Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}" if 'Team_Performance_Drop' in filtered_df else "N/A")
 kpi3.metric("🩹 Total Injuries Recorded", f"{len(filtered_df)}")
 
 # ---------------------
