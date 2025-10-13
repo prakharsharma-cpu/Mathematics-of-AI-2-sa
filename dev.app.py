@@ -51,7 +51,6 @@ if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
     st.success("✅ Data loaded successfully from uploaded CSV.")
 else:
-    # Default fallback (your local CSV)
     default_path = "player_injuries_impact.csv"
     try:
         df = pd.read_csv(default_path)
@@ -85,14 +84,12 @@ if 'Impact_Index' not in df.columns and 'Injury_Duration' in df.columns and 'Tea
 if 'Month' not in df.columns and 'Injury_Start' in df.columns:
     df['Month'] = df['Injury_Start'].dt.month
 
-# Clean and fill
 df.drop_duplicates(inplace=True)
 if 'Rating' in df.columns:
     df['Rating'] = df['Rating'].fillna(df['Rating'].mean())
 if 'Goals' in df.columns:
     df['Goals'] = df['Goals'].fillna(0)
 
-# Compute before/after metrics if columns exist
 if 'Player' in df.columns and 'Rating' in df.columns:
     df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
     df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
@@ -104,9 +101,27 @@ if {'Avg_Rating_Before','Avg_Rating_After'}.issubset(df.columns):
 # ---------------------
 st.sidebar.header("🔍 Filters & Visualization Settings")
 
-filter_club = st.sidebar.multiselect("Club", options=sorted(df['Club'].dropna().unique()), default=sorted(df['Club'].dropna().unique()) if 'Club' in df else [])
-filter_player = st.sidebar.multiselect("Player", options=sorted(df['Player'].dropna().unique()), default=sorted(df['Player'].dropna().unique()) if 'Player' in df else [])
-filter_injury = st.sidebar.multiselect("Injury Type", options=sorted(df['Injury_Type'].dropna().unique()), default=sorted(df['Injury_Type'].dropna().unique()) if 'Injury_Type' in df else [])
+# Safe filters
+if 'Club' in df.columns:
+    club_options = sorted(df['Club'].dropna().unique())
+    filter_club = st.sidebar.multiselect("Club", options=club_options, default=club_options)
+else:
+    filter_club = []
+    st.sidebar.warning("⚠️ 'Club' column not found in dataset.")
+
+if 'Player' in df.columns:
+    player_options = sorted(df['Player'].dropna().unique())
+    filter_player = st.sidebar.multiselect("Player", options=player_options, default=player_options)
+else:
+    filter_player = []
+    st.sidebar.warning("⚠️ 'Player' column not found in dataset.")
+
+if 'Injury_Type' in df.columns:
+    injury_options = sorted(df['Injury_Type'].dropna().unique())
+    filter_injury = st.sidebar.multiselect("Injury Type", options=injury_options, default=injury_options)
+else:
+    filter_injury = []
+    st.sidebar.warning("⚠️ 'Injury_Type' column not found in dataset.")
 
 global_mode = st.sidebar.radio("🧭 Global Visualization Mode", options=["Plotly", "Matplotlib"], index=0)
 st.sidebar.markdown("---")
@@ -114,7 +129,7 @@ st.sidebar.markdown("**Seaborn Theme (Matplotlib mode)**")
 global_style = st.sidebar.radio("Global Seaborn Style", options=["Modern Clean", "Classic Analytics"], index=0)
 st.sidebar.markdown("Tip: select a per-tab override at the top of any tab to override the global mode/style.")
 
-# Apply filters
+# Apply filters safely
 filtered_df = df.copy()
 if not filtered_df.empty:
     if 'Club' in df.columns and filter_club:
@@ -133,7 +148,7 @@ kpi2.metric("💥 Avg Team Performance Drop", f"{filtered_df['Team_Performance_D
 kpi3.metric("🩹 Total Injuries Recorded", f"{len(filtered_df)}")
 
 # ---------------------
-# Tabs (global + per-tab override)
+# Tabs
 # ---------------------
 tabs = st.tabs([
     "🧾 Dataset Overview",
