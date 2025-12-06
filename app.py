@@ -1,6 +1,6 @@
 # ==================================
-# ⚽ Player Injury Impact Dashboard (Smart Column Fix)
-# Auto-detects column names to prevent KeyErrors
+# ⚽ Player Injury Impact Dashboard (Date-Optional)
+# Fixed: 'Injury_Start' is now OPTIONAL. App works without it.
 # ==================================
 import streamlit as st
 import pandas as pd
@@ -14,7 +14,7 @@ import seaborn as sns
 # ---------------------
 st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide")
 st.title("⚽ Player Injury Impact Dashboard")
-st.markdown("Interactive dashboard with Plotly + Matplotlib. **Upload a CSV** or use the demo data.")
+st.markdown("Interactive dashboard. **Upload your CSV**. (Date columns are optional!)")
 
 # ---------------------
 # Helper Utilities
@@ -23,7 +23,6 @@ def get_mode(per_tab_choice, global_mode):
     return per_tab_choice if per_tab_choice in ["Plotly", "Matplotlib"] else global_mode
 
 def apply_seaborn_style(style_name):
-    """Apply seaborn theme based on friendly name."""
     if style_name == "Classic Analytics":
         sns.set_theme(style="darkgrid", palette="muted")
         plt.rcParams.update({"figure.facecolor":"white"})
@@ -40,7 +39,7 @@ def render_matplotlib(fig):
 def generate_sample_data():
     """Generates robust random simulation data."""
     np.random.seed(42)
-    num_rows = 200
+    num_rows = 150
     players = [f"Player_{i}" for i in range(1, 15)]
     clubs = [f"Club_{i}" for i in range(1, 5)]
     dates = pd.date_range("2021-01-01", "2023-01-01", freq="W")
@@ -48,280 +47,220 @@ def generate_sample_data():
     data = {
         "Player": np.random.choice(players, num_rows),
         "Club": np.random.choice(clubs, num_rows),
+        # Sample data HAS date, but user upload doesn't need to.
         "Injury_Start": np.random.choice(dates, num_rows),
         "Injury_Type": np.random.choice(["Hamstring", "Knee", "Ankle", "Calf", "Back"], num_rows),
         "Rating": np.random.uniform(5, 9, num_rows).round(1),
         "Team_Goals_Before": np.random.randint(10, 30, num_rows),
-        "Team_Goals_During": np.random.randint(5, 20, num_rows),
-        "Team_Goals_After": np.random.randint(10, 30, num_rows),
-        "Age": np.random.randint(19, 34, num_rows)
+        "Team_Goals_During": np.random.randint(5, 20, num_rows)
     }
     
-    # Generate explicit end date for demo
+    # Explicitly calculate Duration
     duration = np.random.randint(5, 60, num_rows)
-    data["Injury_End"] = [start + pd.Timedelta(days=int(d)) for start, d in zip(data["Injury_Start"], duration)]
-    
-    return pd.DataFrame(data).sort_values("Injury_Start")
+    df = pd.DataFrame(data)
+    df["Injury_Duration"] = duration
+    return df
 
 # ---------------------
-# SMART DATA LOADING FUNCTION
+# SMART DATA LOADING
 # ---------------------
 def load_and_standardize_csv(uploaded_file):
     try:
-        # 1. Flexible Reader (Auto-detects ; vs , separator)
+        # Flexible Reader
         df = pd.read_csv(uploaded_file, sep=None, engine='python')
-        
-        # 2. Strip whitespace from header
-        df.columns = df.columns.str.strip()
+        df.columns = df.columns.str.strip() # Remove hidden spaces
 
-        # 3. Flexible Column Mapping (Case-insensitive matching)
-        # We look for columns that 'look like' the target and rename them to standard key
+        # Rename map for variations, BUT NOT strictly required
         col_map = {
-            'injury_start': 'Injury_Start', 
-            'date': 'Injury_Start', 
-            'start_date': 'Injury_Start',
-            'injury start': 'Injury_Start',
-            
-            'injury_end': 'Injury_End', 
-            'end_date': 'Injury_End',
-            'injury end': 'Injury_End',
-            
-            'player': 'Player',
-            'name': 'Player',
-            'player_name': 'Player',
-            
-            'club': 'Club',
-            'team': 'Club',
-            
+            'player': 'Player', 'name': 'Player',
+            'club': 'Club', 'team': 'Club',
             'rating': 'Rating',
-            'avg_rating': 'Rating'
+            'injury_type': 'Injury_Type',
+            'duration': 'Injury_Duration', 'days': 'Injury_Duration',
+            'injury_start': 'Injury_Start', 'date': 'Injury_Start' # Still map if it exists
         }
 
-        # Create rename dictionary by checking current columns lower-cased
+        # Case-insensitive Rename
         actual_rename = {}
         for col in df.columns:
-            col_lower = col.lower().replace('.', '_') # standardized key
-            if col_lower in col_map:
-                actual_rename[col] = col_map[col_lower]
+            clean_col = col.lower().replace('.', '_').replace(' ', '_')
+            if clean_col in col_map:
+                actual_rename[col] = col_map[clean_col]
         
         df = df.rename(columns=actual_rename)
-
         return df
-        
     except Exception as e:
-        st.error(f"❌ Failed to parse CSV: {e}")
+        st.error(f"Error parsing CSV: {e}")
         return None
 
 # ---------------------
-# Sidebar
+# Sidebar & Load Logic
 # ---------------------
-st.sidebar.header("📂 Data Configuration")
-
-sample_df = generate_sample_data()
-csv_template = sample_df.head(5).to_csv(index=False).encode('utf-8')
-
-st.sidebar.download_button(
-    "⬇️ Download CSV Template", 
-    data=csv_template, 
-    file_name="template.csv",
-    help="Use this headers: Player, Club, Injury_Start, Injury_End, Rating, Team_Goals_Before, Team_Goals_During"
-)
-
+st.sidebar.header("📂 Data Input")
 uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-data_source = "demo"
-df = None
 
-# ---------------------
-# Load Data
-# ---------------------
 if uploaded_file:
     df = load_and_standardize_csv(uploaded_file)
-    if df is not None:
-        data_source = "upload"
 else:
-    df = sample_df.copy()
+    df = generate_sample_data()
 
 # ---------------------
-# Data Processing (Robust)
+# CRITICAL FIX: Safe Processing
 # ---------------------
 if df is not None:
-    # 1. Validate Crucial Column existence
-    required_cols = ['Injury_Start', 'Player']
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    
-    if missing_cols:
-        st.error(f"⚠️ Critical Error: The following required columns are missing (or misspelled): **{missing_cols}**")
-        st.write("Found columns:", list(df.columns))
-        st.stop()
-    
-    # 2. Ensure DateTime (Safely)
-    try:
+    # 1. Player column is the ONLY strict requirement
+    if 'Player' not in df.columns:
+        # If Player missing, create dummy players
+        df['Player'] = [f"Record_{i}" for i in range(len(df))]
+        st.sidebar.warning("⚠️ Column 'Player' not found. Using Row IDs.")
+
+    # 2. Handle MISSING 'Injury_Start'
+    has_date = False
+    if 'Injury_Start' not in df.columns:
+        # User uploaded data WITHOUT date. 
+        # Create a Dummy Date (Index based) to prevent crashing charts
+        df['Injury_Start'] = pd.date_range(start='2023-01-01', periods=len(df), freq='D')
+        df['Is_Fake_Date'] = True
+    else:
+        # Attempt conversion
         df['Injury_Start'] = pd.to_datetime(df['Injury_Start'], dayfirst=True, errors='coerce')
-        # Drop rows where Date is invalid (NaT)
-        invalid_dates = df['Injury_Start'].isna().sum()
-        if invalid_dates > 0:
-            st.sidebar.warning(f"⚠️ Found {invalid_dates} rows with invalid dates. They have been excluded.")
-        df = df.dropna(subset=['Injury_Start'])
-        
-        if 'Injury_End' in df.columns:
-            df['Injury_End'] = pd.to_datetime(df['Injury_End'], dayfirst=True, errors='coerce')
-        else:
-            # Create dummy end date if missing
-            df['Injury_End'] = df['Injury_Start'] + pd.Timedelta(days=14)
+        df['Injury_Start'].fillna(pd.Timestamp("2023-01-01"), inplace=True)
+        has_date = True
+        df['Is_Fake_Date'] = False
 
-    except Exception as e:
-        st.error(f"Date conversion error: {e}")
-        st.stop()
-
-    # 3. Create Missing Numeric Columns with Defaults
-    expected_numerics = {
-        'Rating': 7.0, 
-        'Team_Goals_Before': 10, 
-        'Team_Goals_During': 10, 
-        'Team_Goals_After': 10,
+    # 3. Handle numeric columns safely
+    numeric_defaults = {
+        'Rating': 7.0,
+        'Team_Goals_Before': 0,
+        'Team_Goals_During': 0,
         'Goals': 0,
-        'Age': 25
+        'Age': 25,
+        'Injury_Duration': 7 # Default to 1 week if duration missing
     }
     
-    for col, default_val in expected_numerics.items():
+    for col, val in numeric_defaults.items():
         if col not in df.columns:
-            df[col] = default_val # fill constant
+            df[col] = val
         else:
-            # Convert to number, coerce invalid strings to default
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(default_val)
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(val)
 
-    # 4. Feature Engineering
-    # Calculate duration
-    if 'Injury_Duration' not in df.columns:
-        df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days
-    
-    # Fix negative durations
-    df['Injury_Duration'] = df['Injury_Duration'].clip(lower=1)
+    # 4. Final Feature Engineering
     df['Month'] = df['Injury_Start'].dt.month_name()
     
-    # Drop calculation
+    # Only calculate meaningful metrics if possible
     df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
-    
-    # Ratings Calc (Sorting Essential)
-    df = df.sort_values(by=['Player', 'Injury_Start'])
-    df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
-    df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
-    
-    if 'Status' not in df.columns:
-        df['Status'] = 'Recovered'
-    if 'Injury_Type' not in df.columns:
-        df['Injury_Type'] = 'Unspecified'
+
+    if 'Club' not in df.columns: df['Club'] = 'All'
+    if 'Injury_Type' not in df.columns: df['Injury_Type'] = 'General'
 
     # ---------------------
     # Filters
     # ---------------------
-    st.sidebar.markdown("---")
+    st.sidebar.divider()
     
-    # safe list comprehension in case of mixed types
-    all_clubs = sorted([str(x) for x in df['Club'].unique()]) if 'Club' in df.columns else ['Unknown']
-    all_players = sorted([str(x) for x in df['Player'].unique()])
-    all_types = sorted([str(x) for x in df['Injury_Type'].unique()])
-
-    sel_club = st.sidebar.multiselect("Club", all_clubs, default=all_clubs)
-    sel_player = st.sidebar.multiselect("Player", all_players, default=all_players)
-    sel_type = st.sidebar.multiselect("Injury Type", all_types, default=all_types)
-
-    # Filtering Logic
+    clubs = sorted(df['Club'].astype(str).unique())
+    sel_clubs = st.sidebar.multiselect("Club", clubs, default=clubs)
+    
+    inj_types = sorted(df['Injury_Type'].astype(str).unique())
+    sel_injuries = st.sidebar.multiselect("Injury Type", inj_types, default=inj_types)
+    
+    # Filter DataFrame
     filtered_df = df[
-        (df['Club'].astype(str).isin(sel_club)) &
-        (df['Player'].astype(str).isin(sel_player)) &
-        (df['Injury_Type'].astype(str).isin(sel_type))
+        (df['Club'].astype(str).isin(sel_clubs)) &
+        (df['Injury_Type'].astype(str).isin(sel_injuries))
     ]
-    
-    if filtered_df.empty:
-        st.warning("⚠️ No data matches your current filters.")
-        st.stop()
-        
-    # Global Settings
-    st.sidebar.markdown("---")
-    g_mode = st.sidebar.radio("Display Mode", ["Plotly", "Matplotlib"])
-    g_style = "Modern Clean"
+
+    # Global Style
+    g_mode = st.sidebar.radio("Display Mode", ["Plotly", "Matplotlib"], horizontal=True)
+    g_style = "Modern Clean" 
     if g_mode == "Matplotlib":
-        g_style = st.sidebar.selectbox("Matplotlib Theme", ["Modern Clean", "Classic Analytics"])
+        g_style = st.sidebar.selectbox("Theme", ["Modern Clean", "Classic Analytics"])
 
     # ---------------------
-    # VISUALIZATION LOGIC
+    # Dashboard Tabs
     # ---------------------
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Injuries Recorded", len(filtered_df))
+    k2.metric("Avg Duration", f"{filtered_df['Injury_Duration'].mean():.0f} Days")
+    k3.metric("Avg Perf. Drop", f"{filtered_df['Team_Performance_Drop'].mean():.1f}")
     
-    # --- Top KPIs ---
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Injuries", len(filtered_df))
-    k2.metric("Avg Duration", f"{filtered_df['Injury_Duration'].mean():.0f} days")
-    k3.metric("Avg Perf Drop", f"{filtered_df['Team_Performance_Drop'].mean():.1f}")
-    k4.metric("Active Players", filtered_df['Player'].nunique())
+    if not has_date and uploaded_file:
+         st.warning("⚠️ NOTE: Your CSV did not contain an 'Injury_Start' date column. Timeline charts below use artificial dates.")
 
-    # --- TABS ---
-    t_trend, t_player, t_stats, t_data = st.tabs(["📊 Trends", "🏃 Player Analysis", "🔬 Deep Stats", "🧾 Raw Data"])
+    tabs = st.tabs(["📊 Trends", "🏥 Injury Types", "📉 Player Impact", "📋 Data"])
 
-    # === Tab 1: Trends ===
-    with t_trend:
-        # Determine month order correctly
-        month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
-                       'July', 'August', 'September', 'October', 'November', 'December']
+    # --- TAB 1: TRENDS (Handles missing date gracefully) ---
+    with tabs[0]:
+        st.subheader("Seasonal & Monthly Trends")
         
-        trends = filtered_df['Month'].value_counts().reindex(month_order).reset_index()
-        trends.columns = ['Month', 'Count']
-
-        st.subheader("Seasonal Injury Trends")
-        if g_mode == "Plotly":
-            fig = px.bar(trends, x='Month', y='Count', title="Injuries by Month", template="plotly_white")
-            render_plotly(fig)
+        if df['Is_Fake_Date'].all() and uploaded_file:
+            st.info("ℹ️ Trends chart skipped (No date data in CSV).")
         else:
-            apply_seaborn_style(g_style)
-            fig, ax = plt.subplots(figsize=(10, 4))
-            sns.barplot(data=trends, x='Month', y='Count', color="steelblue", ax=ax)
-            plt.xticks(rotation=45)
-            render_matplotlib(fig)
-
-    # === Tab 2: Player Analysis ===
-    with t_player:
-        st.subheader("Individual Player Impact")
-        
-        # Safe aggregation
-        impact = filtered_df.groupby("Player").agg({
-            'Team_Performance_Drop': 'mean',
-            'Rating': 'mean',
-            'Injury_Duration': 'count'
-        }).rename(columns={'Injury_Duration':'Count'}).reset_index().sort_values("Team_Performance_Drop", ascending=False).head(10)
-
-        if g_mode == "Plotly":
-            fig = px.scatter(impact, x="Team_Performance_Drop", y="Rating", size="Count", color="Player",
-                             title="Avg Goal Drop vs Player Rating (Size = Num Injuries)")
-            render_plotly(fig)
-        else:
-            apply_seaborn_style(g_style)
-            fig, ax = plt.subplots(figsize=(8, 5))
-            sns.scatterplot(data=impact, x="Team_Performance_Drop", y="Rating", size="Count", hue="Player", ax=ax)
-            ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-            render_matplotlib(fig)
+            # Determine order for months
+            months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December']
+            m_data = filtered_df['Month'].value_counts().reindex(months).reset_index()
+            m_data.columns = ['Month', 'Count']
             
-        st.caption("Higher 'Team Performance Drop' indicates the team scores significantly less when this player is injured.")
-
-    # === Tab 3: Deep Stats ===
-    with t_stats:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.write("**Impact by Injury Type**")
-            inj_impact = filtered_df.groupby('Injury_Type')['Team_Performance_Drop'].mean().sort_values()
-            st.bar_chart(inj_impact)
-            
-        with c2:
-            st.write("**Recovery Time Distribution**")
             if g_mode == "Plotly":
-                fig = px.histogram(filtered_df, x="Injury_Duration", nbins=15, title="Days Out Distribution")
+                fig = px.bar(m_data, x="Month", y="Count", title="Injury Frequency by Month")
                 render_plotly(fig)
             else:
-                fig, ax = plt.subplots()
-                sns.histplot(filtered_df['Injury_Duration'], bins=15, kde=True, ax=ax)
+                apply_seaborn_style(g_style)
+                fig, ax = plt.subplots(figsize=(10, 4))
+                sns.barplot(data=m_data, x="Month", y="Count", color="steelblue", ax=ax)
+                plt.xticks(rotation=45)
                 render_matplotlib(fig)
 
-    # === Tab 4: Raw Data ===
-    with t_data:
+    # --- TAB 2: INJURY TYPES ---
+    with tabs[1]:
+        st.subheader("Distribution of Injury Types")
+        counts = filtered_df['Injury_Type'].value_counts().reset_index()
+        counts.columns = ['Injury_Type', 'Count']
+
+        col1, col2 = st.columns(2)
+        with col1:
+             if g_mode == "Plotly":
+                fig = px.pie(counts, values='Count', names='Injury_Type', hole=0.4)
+                render_plotly(fig)
+             else:
+                apply_seaborn_style(g_style)
+                fig, ax = plt.subplots()
+                ax.pie(counts['Count'], labels=counts['Injury_Type'], autopct='%1.1f%%', colors=sns.color_palette('pastel'))
+                render_matplotlib(fig)
+        with col2:
+             # Impact by Type
+             impact = filtered_df.groupby('Injury_Type')['Team_Performance_Drop'].mean().reset_index()
+             if g_mode == "Plotly":
+                fig2 = px.bar(impact, x="Team_Performance_Drop", y="Injury_Type", orientation='h', title="Goal Drop by Injury")
+                render_plotly(fig2)
+             else:
+                fig2, ax = plt.subplots()
+                sns.barplot(data=impact, x="Team_Performance_Drop", y="Injury_Type", ax=ax, palette="Reds")
+                render_matplotlib(fig2)
+
+    # --- TAB 3: PLAYER IMPACT ---
+    with tabs[2]:
+        st.subheader("Player Analytics")
+        # Ensure we have Player data to group
+        p_stats = filtered_df.groupby('Player').agg({
+            'Injury_Duration': 'sum', 
+            'Rating': 'mean',
+            'Team_Performance_Drop': 'mean'
+        }).reset_index().sort_values('Injury_Duration', ascending=False).head(15)
+
+        if g_mode == "Plotly":
+             fig3 = px.scatter(p_stats, x="Team_Performance_Drop", y="Rating", size="Injury_Duration", hover_name="Player",
+                               color="Player", title="Player Impact Bubble Chart")
+             render_plotly(fig3)
+        else:
+             apply_seaborn_style(g_style)
+             fig3, ax = plt.subplots(figsize=(9,5))
+             sns.scatterplot(data=p_stats, x="Team_Performance_Drop", y="Rating", size="Injury_Duration", hue="Player", ax=ax, sizes=(20, 200))
+             ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+             render_matplotlib(fig3)
+
+    # --- TAB 4: DATA ---
+    with tabs[3]:
+        st.write("Current Filtered Data")
         st.dataframe(filtered_df)
-        csv_dl = filtered_df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Filtered Data", data=csv_dl, file_name="analysis.csv", mime="text/csv")
