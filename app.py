@@ -4,14 +4,14 @@ import numpy as np
 import plotly.express as px
 import matplotlib.pyplot as plt
 import seaborn as sns
-import google.generativeai as genai
+import io
 
 # ---------------------
 # Page config
 # ---------------------
-st.set_page_config(page_title="⚽ Player Injury Impact Dashboard (Gemini + CSV)", layout="wide")
+st.set_page_config(page_title="⚽ Player Injury Impact Dashboard", layout="wide")
 st.title("⚽ Player Injury Impact Dashboard")
-st.markdown("Interactive dashboard with Plotly + Matplotlib/Seaborn + **Gemini AI Analysis**. Choose modes & styles globally or per-tab.")
+st.markdown("Interactive dashboard with Plotly + Matplotlib/Seaborn. Powered by CSV Data (with automatic metric calculation).")
 
 # ---------------------
 # Helper utilities
@@ -20,15 +20,17 @@ def get_mode(per_tab_choice, global_mode):
     return per_tab_choice if per_tab_choice in ["Plotly", "Matplotlib"] else global_mode
 
 def get_style(per_tab_style, global_style):
+    """Return effective seaborn style name."""
     return per_tab_style if per_tab_style in ["Modern Clean", "Classic Analytics"] else global_style
 
 def apply_seaborn_style(style_name):
+    """Apply seaborn theme based on friendly name."""
     if style_name == "Classic Analytics":
         sns.set_theme(style="darkgrid", palette="muted")
-        plt.rcParams.update({"figure.facecolor":"white"})
+        plt.rcParams.update({"figure.facecolor": "white"})
     else:  # Modern Clean
         sns.set_theme(style="whitegrid", palette="deep")
-        plt.rcParams.update({"figure.facecolor":"white"})
+        plt.rcParams.update({"figure.facecolor": "white"})
 
 def render_plotly(fig):
     st.plotly_chart(fig, use_container_width=True)
@@ -36,8 +38,13 @@ def render_plotly(fig):
 def render_matplotlib(fig):
     st.pyplot(fig)
 
-def generate_sample_data():
-    """Generates the original sample data if no CSV is uploaded."""
+# ---------------------
+# Data Loading & Preprocessing Logic
+# ---------------------
+
+@st.cache_data
+def generate_demo_data():
+    """Generates the original synthetic data for demo purposes."""
     np.random.seed(42)
     players = [f"Player_{i}" for i in range(1, 21)]
     clubs = [f"Club_{i}" for i in range(1, 6)]
@@ -56,351 +63,373 @@ def generate_sample_data():
         "Team_Goals_During": np.random.randint(5, 25, 200),
         "Age": np.random.randint(18, 35, 200),
         "Injury_Start": pd.to_datetime(injury_starts),
-        "Injury_End": [start + pd.Timedelta(days=duration) for start, duration in zip(injury_starts, injury_durations_days)],
+        "Injury_End": [start + pd.Timedelta(days=int(duration)) for start, duration in zip(injury_starts, injury_durations_days)],
         "Status": np.random.choice(["Before", "During", "After"], 200),
         "Injury_Type": np.random.choice(injury_types, 200)
     }
     df = pd.DataFrame(data)
+    # Simulate partial Team_Goals_After if not present
     df['Team_Goals_After'] = df['Team_Goals_During'] + np.random.randint(-3, 6, size=len(df))
     return df
 
+def preprocess_data(df):
+    """
+    Cleans raw CSV data, handles dates, and calculates all derived metrics
+    needed for the visualization to function correctly.
+    """
+    df = df.copy()
+    
+    # 1. Date Conversion
+    date_cols = ['Injury_Start', 'Injury_End']
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+
+    # 2. Sort by date (crucial for shift calculations)
+    if 'Injury_Start' in df.columns:
+        df = df.sort_values(by=['Player', 'Injury_Start'])
+
+    # 3. Filling/Deriving Basics
+    if 'Rating' in df.columns:
+        df['Rating'] = df['Rating'].fillna(df['Rating'].mean())
+    if 'Goals' in df.columns:
+        df['Goals'] = df['Goals'].fillna(0)
+
+    # 4. Derive Injury Duration
+    if 'Injury_Duration' not in df.columns:
+        if 'Injury_End' in df.columns and 'Injury_Start' in df.columns:
+            df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days
+            df['Injury_Duration'] = df['Injury_Duration'].apply(lambda x: x if x > 0 else 0)
+        else:
+            df['Injury_Duration'] = 0 # Fallback
+
+    # 5. Rating Changes (Lag/Lead)
+    if 'Avg_Rating_Before' not in df.columns:
+        df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
+        df['Avg_Rating_Before'] = df['Avg_Rating_Before'].fillna(df['Rating']) # Fill First with current
+
+    if 'Avg_Rating_After' not in df.columns:
+        df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
+        df['Avg_Rating_After'] = df['Avg_Rating_After'].fillna(df['Rating']) # Fill last with current
+
+    # 6. Team Performance Metrics
+    # Ensure columns exist, fill with 0 if not to prevent crash
+    for col in ['Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After']:
+        if col not in df.columns:
+            df[col] = 0
+
+    if 'Team_Performance_Drop' not in df.columns:
+        df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
+
+    if 'Performance_Change' not in df.columns:
+        df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
+
+    if 'Month' not in df.columns and 'Injury_Start' in df.columns:
+        df['Month'] = df['Injury_Start'].dt.month
+
+    if 'Impact_Index' not in df.columns:
+        df['Impact_Index'] = df['Team_Performance_Drop'] / df['Injury_Duration'].replace(0, np.nan)
+    
+    if 'Team_Recovery' not in df.columns:
+        df['Team_Recovery'] = df['Team_Goals_After'] - df['Team_Goals_During']
+        
+    return df
+
 # ---------------------
-# Data Loading (CSV Power)
+# Sidebar: Data Upload & Global Settings
 # ---------------------
-st.sidebar.header("📂 Data Source")
-uploaded_file = st.sidebar.file_uploader("Upload CSV (or skip for sample data)", type=["csv"])
+st.sidebar.header("📂 Data Input")
+
+uploaded_file = st.sidebar.file_uploader("Upload CSV (or use Demo Data)", type=["csv"])
+
+# CSV Template Downloader
+required_columns = ["Player", "Club", "Rating", "Goals", "Team_Goals_Before", 
+                   "Team_Goals_During", "Team_Goals_After", "Age", 
+                   "Injury_Start", "Injury_End", "Status", "Injury_Type"]
 
 if uploaded_file is not None:
     try:
-        df = pd.read_csv(uploaded_file)
-        # Convert date columns just in case
-        for col in ['Injury_Start', 'Injury_End']:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col])
-        st.sidebar.success("✅ CSV Loaded Successfully")
+        raw_df = pd.read_csv(uploaded_file)
+        
+        # Simple Validation
+        missing_cols = [c for c in required_columns if c not in raw_df.columns]
+        
+        if missing_cols:
+            st.sidebar.warning(f"⚠️ Missing columns in CSV: {', '.join(missing_cols)}. Calculating estimates where possible.")
+        else:
+            st.sidebar.success("✅ CSV Uploaded Successfully!")
+            
+        df = preprocess_data(raw_df)
+        st.info("Using **Uploaded CSV Data**")
+        
     except Exception as e:
-        st.sidebar.error(f"Error loading CSV: {e}")
+        st.error(f"Error reading file: {e}")
         st.stop()
 else:
-    df = generate_sample_data()
-    st.sidebar.info("ℹ️ Using Sample Data")
+    # Use fallback synthetic data
+    raw_df = generate_demo_data()
+    df = preprocess_data(raw_df)
+    st.sidebar.info("ℹ️ Using **Demo Data** (Upload CSV to change)")
 
-# ---------------------
-# Derived metrics and cleaning
-# ---------------------
-# Ensure required columns exist for the original dashboard features to work
-required_cols = ['Player', 'Club', 'Rating', 'Team_Goals_Before', 'Team_Goals_During', 'Injury_Start', 'Injury_End', 'Status', 'Injury_Type']
-missing_cols = [c for c in required_cols if c not in df.columns]
+# Template generator for users
+with st.sidebar.expander("📥 Get CSV Template"):
+    template_df = pd.DataFrame(columns=required_columns)
+    csv = template_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "Download Blank CSV Template",
+        data=csv,
+        file_name="injury_dashboard_template.csv",
+        mime="text/csv",
+        help="Upload a file with these headers for best results."
+    )
 
-if missing_cols:
-    st.error(f"The uploaded CSV is missing columns required for this dashboard: {missing_cols}")
-    st.stop()
-
-# Basic cleaning/Feature Eng
-df.drop_duplicates(inplace=True)
-df['Rating'] = df['Rating'].fillna(df['Rating'].mean())
-df['Goals'] = df['Goals'].fillna(0) if 'Goals' in df.columns else 0
-df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days
-df['Injury_Duration'] = df['Injury_Duration'].apply(lambda x: x if x > 0 else 0)
-
-df['Avg_Rating_Before'] = df.groupby('Player')['Rating'].shift(1)
-df['Avg_Rating_After'] = df.groupby('Player')['Rating'].shift(-1)
-df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
-df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
-df['Month'] = df['Injury_Start'].dt.month
-df['Impact_Index'] = df['Team_Performance_Drop'] / df['Injury_Duration'].replace(0, np.nan)
-if 'Team_Goals_After' in df.columns:
-    df['Team_Recovery'] = df['Team_Goals_After'] - df['Team_Goals_During']
-else:
-    df['Team_Recovery'] = 0
-
-# ---------------------
-# Sidebar: filters + global mode + global style
-# ---------------------
 st.sidebar.markdown("---")
-st.sidebar.header("🔍 Filters & Visual Settings")
-filter_club = st.sidebar.multiselect("Club", options=sorted(df['Club'].unique()), default=sorted(df['Club'].unique()))
-filter_player = st.sidebar.multiselect("Player", options=sorted(df['Player'].unique()), default=sorted(df['Player'].unique()))
-filter_injury = st.sidebar.multiselect("Injury Type", options=sorted(df['Injury_Type'].unique()), default=sorted(df['Injury_Type'].unique()))
+st.sidebar.header("🔍 Filters & Viz Settings")
+
+# ---------------------
+# Sidebar Filters
+# ---------------------
+filter_club = st.sidebar.multiselect("Club", options=sorted(df['Club'].astype(str).unique()), default=sorted(df['Club'].astype(str).unique()))
+filter_player = st.sidebar.multiselect("Player", options=sorted(df['Player'].astype(str).unique()), default=sorted(df['Player'].astype(str).unique()))
+filter_injury = st.sidebar.multiselect("Injury Type", options=sorted(df['Injury_Type'].astype(str).unique()), default=sorted(df['Injury_Type'].astype(str).unique()))
 
 global_mode = st.sidebar.radio("🧭 Global Visualization Mode", options=["Plotly", "Matplotlib"], index=0)
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("**Seaborn Theme (Matplotlib mode)**")
 global_style = st.sidebar.radio("Global Seaborn Style", options=["Modern Clean", "Classic Analytics"], index=0)
+st.sidebar.markdown("Tip: Select per-tab overrides at the top of any tab.")
 
 # Apply filters
 filtered_df = df[
-    (df['Club'].isin(filter_club)) &
-    (df['Player'].isin(filter_player)) &
-    (df['Injury_Type'].isin(filter_injury))
+    (df['Club'].astype(str).isin(filter_club)) &
+    (df['Player'].astype(str).isin(filter_player)) &
+    (df['Injury_Type'].astype(str).isin(filter_injury))
 ].copy()
 
 # ---------------------
-# Sidebar: Gemini Settings
+# KPIs
 # ---------------------
-st.sidebar.markdown("---")
-st.sidebar.header("✨ Gemini AI Assistant")
-gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password", help="Get a key from Google AI Studio")
+if filtered_df.empty:
+    st.error("❌ No data matches the selected filters. Please adjust filters.")
+else:
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}")
+    kpi2.metric("💥 Avg Team Performance Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}")
+    kpi3.metric("🩹 Total Injuries Recorded", f"{len(filtered_df)}")
 
-# ---------------------
-# Gemini Integration Logic
-# ---------------------
-def run_gemini_analysis(query, dataframe):
-    if not gemini_api_key:
-        return "⚠️ Please enter a Gemini API Key in the sidebar."
-    
-    genai.configure(api_key=gemini_api_key)
-    
-    # Create context from data stats
-    stats_summary = dataframe.describe(include='all', datetime_is_numeric=True).to_string()
-    headers = ", ".join(dataframe.columns.tolist())
-    sample_data = dataframe.head(5).to_string()
-    
-    prompt = f"""
-    You are a data analyst assistant for a soccer analytics dashboard.
-    The dataset has the following columns: {headers}.
-    Here is a statistical summary of the CURRENT FILTERED DATA:
-    {stats_summary}
-    
-    Here is a sample of the first 5 rows:
-    {sample_data}
-    
-    User Query: "{query}"
-    
-    Based on the summary and data structure, provide a concise, data-driven answer. 
-    Focus on trends regarding injuries, team performance drop, and player ratings.
-    If you cannot answer from the summary provided, say so.
-    """
-    
-    try:
-        model = genai.GenerativeModel("gemini-1.5-flash") # Or gemini-pro
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Error contacting Gemini: {str(e)}"
+    # ---------------------
+    # Tabs (global + per-tab override)
+    # ---------------------
+    tabs = st.tabs([
+        "🧾 Dataset Overview",
+        "📊 Trends",
+        "📈 Player Impact",
+        "🔥 Club Analysis",
+        "🔬 Injury Analysis",
+        "🔎 Player Deep Dive"
+    ])
 
-# ---------------------
-# KPIs & AI Analysis
-# ---------------------
-kpi1, kpi2, kpi3 = st.columns(3)
-kpi1.metric("⚽ Avg Rating", f"{filtered_df['Rating'].mean():.2f}")
-kpi2.metric("💥 Avg Team Performance Drop", f"{filtered_df['Team_Performance_Drop'].mean():.2f}")
-kpi3.metric("🩹 Total Injuries Recorded", f"{len(filtered_df)}")
+    # ---------- Tab 0: Dataset Overview ----------
+    with tabs[0]:
+        st.subheader("📄 Dataset Preview and Summary")
+        tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0)
+        tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0)
+        mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
+        style = get_style(tab_style if tab_style != "Auto" else None, global_style)
 
-# AI Section
-with st.expander("🧠 **Gemini AI Analyst** - Ask about the data", expanded=False):
-    if not gemini_api_key:
-        st.warning("Please provide a Gemini API Key in the sidebar to enable AI features.")
-    
-    ai_query = st.text_input("Ask a question (e.g., 'Which injury type causes the biggest drop in team goals?')")
-    if st.button("Analyze with Gemini"):
-        if ai_query:
-            with st.spinner("Gemini is analyzing the filtered data..."):
-                analysis_result = run_gemini_analysis(ai_query, filtered_df)
-                st.markdown(analysis_result)
+        st.dataframe(filtered_df.head(), use_container_width=True)
+        st.write(f"**Total Records (Filtered):** {filtered_df.shape[0]} | **Columns:** {filtered_df.shape[1]}")
 
-# ---------------------
-# Tabs (Original features preserved)
-# ---------------------
-tabs = st.tabs([
-    "🧾 Dataset Overview",
-    "📊 Trends",
-    "📈 Player Impact",
-    "🔥 Club Analysis",
-    "🔬 Injury Analysis",
-    "🔎 Player Deep Dive"
-])
+        with st.expander("📈 Statistical Summary and Correlation"):
+            # Select only numeric columns for correlation to avoid errors
+            numeric_cols = filtered_df.select_dtypes(include=[np.number])
+            if 'Age' in numeric_cols and 'Rating' in numeric_cols and 'Team_Performance_Drop' in numeric_cols:
+                focus_cols = ['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']
+                valid_focus = [c for c in focus_cols if c in numeric_cols.columns]
+                
+                st.dataframe(numeric_cols[valid_focus].describe())
+                corr = numeric_cols[valid_focus].corr()
 
-# ---------- Tab 0: Dataset Overview ----------
-with tabs[0]:
-    st.subheader("📄 Dataset Preview and Summary")
-    tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0)
-    tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0)
-    mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
-    style = get_style(tab_style if tab_style != "Auto" else None, global_style)
+                if mode == "Plotly":
+                    fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r',
+                                         title='Correlation Matrix (Plotly)', labels=dict(x="Metric", y="Metric", color="Correlation"))
+                    render_plotly(fig_corr)
+                else:
+                    apply_seaborn_style(style)
+                    fig, ax = plt.subplots(figsize=(6, 5))
+                    sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f", ax=ax)
+                    ax.set_title("Correlation Matrix (Matplotlib / Seaborn)")
+                    plt.tight_layout()
+                    render_matplotlib(fig)
+            else:
+                st.write("Not enough numeric data for correlation analysis.")
 
-    st.dataframe(filtered_df.head(100), use_container_width=True)
-    st.write(f"**Total Filtered Records:** {filtered_df.shape[0]} | **Columns:** {filtered_df.shape[1]}")
+    # ---------- Tab 1: Trends ----------
+    with tabs[1]:
+        st.subheader("📊 Trends")
+        tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_trends_mode")
+        tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_trends_style")
+        mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
+        style = get_style(tab_style if tab_style != "Auto" else None, global_style)
 
-    with st.expander("📈 Statistical Summary and Correlation"):
-        cols_for_corr = ['Age', 'Rating', 'Team_Performance_Drop', 'Injury_Duration']
-        # Filter strictly numeric cols existing in DF
-        existing_cols = [c for c in cols_for_corr if c in filtered_df.columns]
+        # Top players by avg Team_Performance_Drop
+        impact = filtered_df.groupby("Player")['Team_Performance_Drop'].mean().sort_values(ascending=False).head(10).reset_index()
+
+        if mode == "Plotly":
+            fig1 = px.bar(impact, x="Team_Performance_Drop", y="Player", orientation="h",
+                          color="Team_Performance_Drop", color_continuous_scale="Reds",
+                          title="Impact of Player Absence on Team Goals (Top 10)")
+            render_plotly(fig1)
+        else:
+            apply_seaborn_style(style)
+            fig, ax = plt.subplots(figsize=(8, 4))
+            sns.barplot(data=impact, y="Player", x="Team_Performance_Drop", palette="Reds_r", ax=ax)
+            ax.set_title("Impact of Player Absence on Team Goals (Top 10) - Matplotlib")
+            ax.set_xlabel("Avg Team Performance Drop")
+            plt.tight_layout()
+            render_matplotlib(fig)
+
+        st.markdown("---")
+        # Performance timeline for sample players
+        sample_players = filtered_df['Player'].unique()[:5]
+        timeline_df = filtered_df[filtered_df['Player'].isin(sample_players)].sort_values('Injury_Start')
         
-        if existing_cols:
-            st.dataframe(filtered_df[existing_cols].describe())
-            corr = filtered_df[existing_cols].corr()
-
+        if not timeline_df.empty:
             if mode == "Plotly":
-                fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r',
-                                     title='Correlation Matrix (Plotly)', labels=dict(x="Metric", y="Metric", color="Correlation"))
-                render_plotly(fig_corr)
+                fig2 = px.line(timeline_df, x="Injury_Start", y="Rating", color="Player", markers=True,
+                               title="Rating Fluctuation Around Injuries (Sample Players)")
+                render_plotly(fig2)
             else:
                 apply_seaborn_style(style)
-                fig, ax = plt.subplots(figsize=(6, 5))
-                sns.heatmap(corr, annot=True, cmap='coolwarm', fmt=".2f", ax=ax)
-                ax.set_title("Correlation Matrix (Matplotlib / Seaborn)")
+                fig, ax = plt.subplots(figsize=(10, 5))
+                for player in sample_players:
+                    p_df = timeline_df[timeline_df['Player'] == player]
+                    if not p_df.empty:
+                        ax.plot(p_df['Injury_Start'], p_df['Rating'], marker='o', label=player)
+                ax.set_title("Rating Fluctuation Around Injuries (Sample Players) - Matplotlib")
+                ax.set_xlabel("Injury Start")
+                ax.set_ylabel("Rating")
+                ax.legend()
                 plt.tight_layout()
                 render_matplotlib(fig)
 
-# ---------- Tab 1: Trends ----------
-with tabs[1]:
-    st.subheader("📊 Trends")
-    tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_trends_mode")
-    tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_trends_style")
-    mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
-    style = get_style(tab_style if tab_style != "Auto" else None, global_style)
+        st.markdown("---")
+        if 'Month' in filtered_df.columns:
+            monthly_trend = filtered_df.groupby('Month').size().reset_index(name='Injury_Count').sort_values('Month')
+            if mode == "Plotly":
+                fig_trend = px.line(monthly_trend, x='Month', y='Injury_Count', markers=True, title='Injury Frequency Over the Season')
+                render_plotly(fig_trend)
+            else:
+                apply_seaborn_style(style)
+                fig, ax = plt.subplots(figsize=(8, 3))
+                ax.plot(monthly_trend['Month'], monthly_trend['Injury_Count'], marker='o')
+                ax.set_title("Monthly Injury Trend - Matplotlib")
+                ax.set_xlabel("Month")
+                ax.set_ylabel("Injury Count")
+                plt.tight_layout()
+                render_matplotlib(fig)
 
-    impact = filtered_df.groupby("Player")['Team_Performance_Drop'].mean().sort_values(ascending=False).head(10).reset_index()
+    # ---------- Tab 2: Player Impact ----------
+    with tabs[2]:
+        st.subheader("📈 Player Impact")
+        tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_player_mode")
+        tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_player_style")
+        mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
+        style = get_style(tab_style if tab_style != "Auto" else None, global_style)
 
-    if mode == "Plotly":
-        fig1 = px.bar(impact, x="Team_Performance_Drop", y="Player", orientation="h",
-                      color="Team_Performance_Drop", color_continuous_scale="Reds",
-                      title="Impact of Player Absence on Team Goals (Top 10)")
-        render_plotly(fig1)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(8, 4))
-        sns.barplot(data=impact, y="Player", x="Team_Performance_Drop", palette="Reds_r", ax=ax)
-        ax.set_title("Impact of Player Absence on Team Goals (Top 10) - Matplotlib")
-        ax.set_xlabel("Avg Team Performance Drop")
-        plt.tight_layout()
-        render_matplotlib(fig)
+        if 'Performance_Change' in filtered_df.columns:
+            leaderboard = filtered_df.groupby('Player')['Performance_Change'].mean().sort_values(ascending=False).head(10).reset_index()
+            st.markdown("**Comeback Players Leaderboard (Rating Change Post-Injury)**")
+            st.dataframe(leaderboard, use_container_width=True)
+            st.markdown("---")
 
-    st.markdown("---")
-    sample_players = filtered_df['Player'].unique()[:5]
-    timeline_df = filtered_df[filtered_df['Player'].isin(sample_players)].sort_values('Injury_Start')
-    
-    if not timeline_df.empty:
         if mode == "Plotly":
-            fig2 = px.line(timeline_df, x="Injury_Start", y="Rating", color="Player", markers=True,
-                           title="Rating Fluctuation Around Injuries (Sample Players)")
-            render_plotly(fig2)
+            fig3 = px.scatter(filtered_df, x="Age", y="Team_Performance_Drop", color="Club", hover_data=["Player"],
+                              title="Age vs Team Performance Drop (Plotly)")
+            render_plotly(fig3)
         else:
             apply_seaborn_style(style)
-            fig, ax = plt.subplots(figsize=(10, 5))
-            for player in sample_players:
-                p_df = timeline_df[timeline_df['Player'] == player]
-                ax.plot(p_df['Injury_Start'], p_df['Rating'], marker='o', label=player)
-            ax.set_title("Rating Fluctuation Around Injuries (Sample Players) - Matplotlib")
-            ax.set_xlabel("Injury Start")
-            ax.set_ylabel("Rating")
-            ax.legend()
+            fig, ax = plt.subplots(figsize=(8, 5))
+            sns.scatterplot(data=filtered_df, x="Age", y="Team_Performance_Drop", hue="Club", ax=ax)
+            ax.set_title("Age vs Team Performance Drop (Matplotlib)")
             plt.tight_layout()
             render_matplotlib(fig)
 
-    st.markdown("---")
-    monthly_trend = filtered_df.groupby('Month').size().reset_index(name='Injury_Count').sort_values('Month')
-    if mode == "Plotly":
-        fig_trend = px.line(monthly_trend, x='Month', y='Injury_Count', markers=True, title='Injury Frequency Over the Season')
-        render_plotly(fig_trend)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(8, 3))
-        ax.plot(monthly_trend['Month'], monthly_trend['Injury_Count'], marker='o')
-        ax.set_title("Monthly Injury Trend - Matplotlib")
-        ax.set_xlabel("Month")
-        ax.set_ylabel("Injury Count")
-        plt.tight_layout()
-        render_matplotlib(fig)
+        st.markdown("---")
+        if 'Status' in filtered_df.columns:
+            status_avg = filtered_df.groupby('Status')['Rating'].mean().reset_index()
+            if mode == "Plotly":
+                fig_status = px.bar(status_avg, x='Status', y='Rating', color='Status', title='Average Rating by Injury Phase (Plotly)')
+                render_plotly(fig_status)
+            else:
+                apply_seaborn_style(style)
+                fig, ax = plt.subplots(figsize=(6, 4))
+                sns.barplot(data=status_avg, x='Status', y='Rating', palette="pastel", ax=ax)
+                ax.set_title("Average Rating by Injury Phase (Matplotlib)")
+                plt.tight_layout()
+                render_matplotlib(fig)
 
-# ---------- Tab 2: Player Impact ----------
-with tabs[2]:
-    st.subheader("📈 Player Impact")
-    tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_player_mode")
-    tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_player_style")
-    mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
-    style = get_style(tab_style if tab_style != "Auto" else None, global_style)
+        st.markdown("---")
+        player_perf = filtered_df.groupby('Player')[['Avg_Rating_Before', 'Avg_Rating_After']].mean().dropna().reset_index()
+        if not player_perf.empty:
+            if mode == "Plotly":
+                fig_player_perf = px.bar(player_perf, x='Player', y=['Avg_Rating_Before', 'Avg_Rating_After'], barmode='group',
+                                         title='Average Player Rating: Before vs After Injury (Plotly)')
+                render_plotly(fig_player_perf)
+            else:
+                apply_seaborn_style(style)
+                fig, ax = plt.subplots(figsize=(10, 5))
+                player_perf_melt = player_perf.melt(id_vars='Player', value_vars=['Avg_Rating_Before', 'Avg_Rating_After'], var_name='Phase', value_name='Rating')
+                sns.barplot(data=player_perf_melt, x='Player', y='Rating', hue='Phase', ax=ax)
+                ax.set_title("Average Player Rating: Before vs After Injury (Matplotlib)")
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                render_matplotlib(fig)
+        else:
+            st.info("No before/after rating data available for selected filters.")
 
-    leaderboard = filtered_df.groupby('Player')['Performance_Change'].mean().sort_values(ascending=False).head(10).reset_index()
-    st.markdown("**Comeback Players Leaderboard (Rating Change Post-Injury)**")
-    st.dataframe(leaderboard, use_container_width=True)
-    st.markdown("---")
+    # ---------- Tab 3: Club Analysis ----------
+    with tabs[3]:
+        st.subheader("🔥 Club Analysis")
+        tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_club_mode")
+        tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_club_style")
+        mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
+        style = get_style(tab_style if tab_style != "Auto" else None, global_style)
 
-    if mode == "Plotly":
-        fig3 = px.scatter(filtered_df, x="Age", y="Team_Performance_Drop", color="Club", hover_data=["Player"],
-                          title="Age vs Team Performance Drop (Plotly)")
-        render_plotly(fig3)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(8, 5))
-        sns.scatterplot(data=filtered_df, x="Age", y="Team_Performance_Drop", hue="Club", ax=ax)
-        ax.set_title("Age vs Team Performance Drop (Matplotlib)")
-        plt.tight_layout()
-        render_matplotlib(fig)
+        if 'Month' in filtered_df.columns:
+            heatmap_data = filtered_df.groupby(['Club', 'Month']).size().reset_index(name="Count")
+            if heatmap_data.empty:
+                st.info("No data for the selected filters.")
+            else:
+                if mode == "Plotly":
+                    fig4 = px.density_heatmap(heatmap_data, x="Month", y="Club", z="Count", color_continuous_scale="Blues",
+                                              title="When Do Injuries Occur During the Season? (Plotly)")
+                    render_plotly(fig4)
+                else:
+                    apply_seaborn_style(style)
+                    pivot = heatmap_data.pivot(index='Club', columns='Month', values='Count').fillna(0)
+                    fig, ax = plt.subplots(figsize=(8, 4))
+                    sns.heatmap(pivot, annot=True, fmt=".0f", cmap='Blues', ax=ax)
+                    ax.set_title("When Do Injuries Occur During the Season? (Matplotlib)")
+                    plt.tight_layout()
+                    render_matplotlib(fig)
 
-    st.markdown("---")
-    status_avg = filtered_df.groupby('Status')['Rating'].mean().reset_index()
-    if mode == "Plotly":
-        fig_status = px.bar(status_avg, x='Status', y='Rating', color='Status', title='Average Rating by Injury Phase (Plotly)')
-        render_plotly(fig_status)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(6, 4))
-        sns.barplot(data=status_avg, x='Status', y='Rating', palette="pastel", ax=ax)
-        ax.set_title("Average Rating by Injury Phase (Matplotlib)")
-        plt.tight_layout()
-        render_matplotlib(fig)
-
-    st.markdown("---")
-    player_perf = filtered_df.groupby('Player')[['Avg_Rating_Before', 'Avg_Rating_After']].mean().dropna().reset_index()
-    if not player_perf.empty:
+        st.markdown("---")
+        club_injuries = filtered_df.groupby("Club")['Injury_Start'].count().reset_index().rename(columns={"Injury_Start":"Injury_Count"})
         if mode == "Plotly":
-            fig_player_perf = px.bar(player_perf, x='Player', y=['Avg_Rating_Before', 'Avg_Rating_After'], barmode='group',
-                                     title='Average Player Rating: Before vs After Injury (Plotly)')
-            render_plotly(fig_player_perf)
+            fig5 = px.bar(club_injuries, x="Club", y="Injury_Count", color="Injury_Count", color_continuous_scale="Viridis",
+                          title="Total Recorded Injuries per Club (Plotly)")
+            render_plotly(fig5)
         else:
             apply_seaborn_style(style)
-            fig, ax = plt.subplots(figsize=(10, 5))
-            player_perf_melt = player_perf.melt(id_vars='Player', value_vars=['Avg_Rating_Before', 'Avg_Rating_After'], var_name='Phase', value_name='Rating')
-            sns.barplot(data=player_perf_melt, x='Player', y='Rating', hue='Phase', ax=ax)
-            ax.set_title("Average Player Rating: Before vs After Injury (Matplotlib)")
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            render_matplotlib(fig)
-    else:
-        st.info("No before/after rating data available for selected filters.")
-
-# ---------- Tab 3: Club Analysis ----------
-with tabs[3]:
-    st.subheader("🔥 Club Analysis")
-    tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_club_mode")
-    tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_club_style")
-    mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
-    style = get_style(tab_style if tab_style != "Auto" else None, global_style)
-
-    heatmap_data = filtered_df.groupby(['Club', 'Month']).size().reset_index(name="Count")
-    if heatmap_data.empty:
-        st.info("No data for the selected filters.")
-    else:
-        if mode == "Plotly":
-            fig4 = px.density_heatmap(heatmap_data, x="Month", y="Club", z="Count", color_continuous_scale="Blues",
-                                      title="When Do Injuries Occur During the Season? (Plotly)")
-            render_plotly(fig4)
-        else:
-            apply_seaborn_style(style)
-            pivot = heatmap_data.pivot(index='Club', columns='Month', values='Count').fillna(0)
             fig, ax = plt.subplots(figsize=(8, 4))
-            sns.heatmap(pivot, annot=True, fmt=".0f", cmap='Blues', ax=ax)
-            ax.set_title("When Do Injuries Occur During the Season? (Matplotlib)")
+            sns.barplot(data=club_injuries, x='Club', y='Injury_Count', palette="viridis", ax=ax)
+            ax.set_title("Total Recorded Injuries per Club (Matplotlib)")
             plt.tight_layout()
             render_matplotlib(fig)
 
-    st.markdown("---")
-    club_injuries = filtered_df.groupby("Club")['Injury_Start'].count().reset_index().rename(columns={"Injury_Start":"Injury_Count"})
-    if mode == "Plotly":
-        fig5 = px.bar(club_injuries, x="Club", y="Injury_Count", color="Injury_Count", color_continuous_scale="Viridis",
-                      title="Total Recorded Injuries per Club (Plotly)")
-        render_plotly(fig5)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(8, 4))
-        sns.barplot(data=club_injuries, x='Club', y='Injury_Count', palette="viridis", ax=ax)
-        ax.set_title("Total Recorded Injuries per Club (Matplotlib)")
-        plt.tight_layout()
-        render_matplotlib(fig)
-
-    st.markdown("---")
-    if {'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After'}.issubset(filtered_df.columns):
+        st.markdown("---")
         team_goals = filtered_df.groupby('Club')[['Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After']].mean().reset_index()
         if team_goals.empty:
             st.info("No team goals data for selected filters.")
@@ -418,122 +447,130 @@ with tabs[3]:
                 plt.xticks(rotation=45)
                 plt.tight_layout()
                 render_matplotlib(fig)
-    
-    st.markdown("---")
-    top_clubs = filtered_df.groupby('Club')['Team_Performance_Drop'].mean().sort_values(ascending=False).head(5).reset_index()
-    st.dataframe(top_clubs, use_container_width=True)
 
-# ---------- Tab 4: Injury Analysis ----------
-with tabs[4]:
-    st.subheader("🔬 Injury Analysis")
-    tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_injury_mode")
-    tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_injury_style")
-    mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
-    style = get_style(tab_style if tab_style != "Auto" else None, global_style)
+        st.markdown("---")
+        top_clubs = filtered_df.groupby('Club')['Team_Performance_Drop'].mean().sort_values(ascending=False).head(5).reset_index()
+        st.write("**Highest Performance Drop per Club**")
+        st.dataframe(top_clubs, use_container_width=True)
 
-    if mode == "Matplotlib":
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(10, 4))
-        sns.boxplot(data=filtered_df, x='Injury_Type', y='Team_Performance_Drop', ax=ax, palette="Set2")
-        ax.set_title("Team Performance Drop by Injury Type (Matplotlib)")
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        render_matplotlib(fig)
-    else:
-        fig_injury_impact = px.box(filtered_df, x='Injury_Type', y='Team_Performance_Drop', color='Injury_Type',
-                                   title='Team Performance Drop by Injury Type (Plotly)')
-        render_plotly(fig_injury_impact)
+    # ---------- Tab 4: Injury Analysis ----------
+    with tabs[4]:
+        st.subheader("🔬 Injury Analysis")
+        tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_injury_mode")
+        tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_injury_style")
+        mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
+        style = get_style(tab_style if tab_style != "Auto" else None, global_style)
 
-    st.markdown("---")
-    injury_counts = filtered_df['Injury_Type'].value_counts().reset_index()
-    injury_counts.columns = ['Injury_Type', 'Count']
-    if mode == "Plotly":
-        fig_injury_counts = px.bar(injury_counts.sort_values('Count', ascending=False),
-                                   x='Injury_Type', y='Count', color='Count',
-                                   color_continuous_scale='Plasma', title='Most Common Injury Types (Plotly)')
-        render_plotly(fig_injury_counts)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(8, 4))
-        sns.barplot(data=injury_counts, x='Injury_Type', y='Count', palette="plasma", ax=ax)
-        ax.set_title("Most Common Injury Types (Matplotlib)")
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        render_matplotlib(fig)
-
-    st.markdown("---")
-    impact_df = filtered_df.groupby('Injury_Type')['Impact_Index'].mean().reset_index()
-    if mode == "Plotly":
-        fig_impact = px.bar(impact_df, x='Injury_Type', y='Impact_Index', color='Impact_Index',
-                            color_continuous_scale='Inferno', title='Average Impact Index (Plotly)')
-        render_plotly(fig_impact)
-    else:
-        apply_seaborn_style(style)
-        fig, ax = plt.subplots(figsize=(8, 3))
-        sns.barplot(data=impact_df, x='Injury_Type', y='Impact_Index', palette="inferno", ax=ax)
-        ax.set_title("Average Impact Index (Matplotlib)")
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        render_matplotlib(fig)
-
-# ---------- Tab 5: Player Deep Dive ----------
-with tabs[5]:
-    st.subheader("🔎 Player Deep Dive")
-    tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_deep_mode")
-    tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_deep_style")
-    mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
-    style = get_style(tab_style if tab_style != "Auto" else None, global_style)
-
-    player_to_analyze = st.selectbox("Select a Player to Analyze", options=sorted(df['Player'].unique()))
-    if player_to_analyze:
-        player_df = filtered_df[filtered_df['Player'] == player_to_analyze].copy()
-        st.markdown(f"### Analytics for: **{player_to_analyze}**")
-
-        if player_df.empty:
-            st.warning("No data for this player with the current filters.")
+        if mode == "Matplotlib":
+            apply_seaborn_style(style)
+            fig, ax = plt.subplots(figsize=(10, 4))
+            sns.boxplot(data=filtered_df, x='Injury_Type', y='Team_Performance_Drop', ax=ax, palette="Set2")
+            ax.set_title("Team Performance Drop by Injury Type (Matplotlib)")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            render_matplotlib(fig)
         else:
-            kpi4, kpi5, kpi6 = st.columns(3)
-            kpi4.metric("⚽ Average Rating", f"{player_df['Rating'].mean():.2f}")
-            kpi5.metric("🩹 Total Injuries", f"{len(player_df)}")
-            kpi6.metric("⏳ Avg. Injury Duration (Days)", f"{player_df['Injury_Duration'].mean():.1f}")
+            fig_injury_impact = px.box(filtered_df, x='Injury_Type', y='Team_Performance_Drop', color='Injury_Type',
+                                       title='Team Performance Drop by Injury Type (Plotly)')
+            render_plotly(fig_injury_impact)
 
-            st.subheader("Injury History")
-            display_cols = {
-                'Injury_Start': 'From',
-                'Injury_End': 'To',
-                'Injury_Type': 'Injury',
-                'Injury_Duration': 'Duration (Days)',
-                'Team_Performance_Drop': 'Team Goal Drop',
-                'Team_Recovery': 'Team Goal Recovery After'
-            }
-            available_disp_cols = {k: v for k, v in display_cols.items() if k in player_df.columns}
-            st.dataframe(player_df[list(available_disp_cols.keys())].rename(columns=available_disp_cols).sort_values(by='From', ascending=False), use_container_width=True)
+        st.markdown("---")
+        injury_counts = filtered_df['Injury_Type'].value_counts().reset_index()
+        injury_counts.columns = ['Injury_Type', 'Count']
+        if mode == "Plotly":
+            fig_injury_counts = px.bar(injury_counts.sort_values('Count', ascending=False),
+                                       x='Injury_Type', y='Count', color='Count',
+                                       color_continuous_scale='Plasma', title='Most Common Injury Types (Plotly)')
+            render_plotly(fig_injury_counts)
+        else:
+            apply_seaborn_style(style)
+            fig, ax = plt.subplots(figsize=(8, 4))
+            sns.barplot(data=injury_counts, x='Injury_Type', y='Count', palette="plasma", ax=ax)
+            ax.set_title("Most Common Injury Types (Matplotlib)")
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            render_matplotlib(fig)
 
-            st.subheader("Performance Timeline")
+        st.markdown("---")
+        if 'Impact_Index' in filtered_df.columns:
+            impact_df = filtered_df.groupby('Injury_Type')['Impact_Index'].mean().reset_index()
             if mode == "Plotly":
-                fig_player = px.line(player_df.sort_values(by='Injury_Start'), x="Injury_Start", y="Rating", markers=True,
-                                     title=f"Rating Over Time for {player_to_analyze}")
-                fig_player.update_traces(text=player_df['Rating'], textposition='top center', hovertemplate='Date: %{x}<br>Rating: %{y:.2f}')
-                render_plotly(fig_player)
+                fig_impact = px.bar(impact_df, x='Injury_Type', y='Impact_Index', color='Impact_Index',
+                                    color_continuous_scale='Inferno', title='Average Impact Index (Plotly)')
+                render_plotly(fig_impact)
             else:
                 apply_seaborn_style(style)
-                fig, ax = plt.subplots(figsize=(8, 4))
-                sorted_df = player_df.sort_values('Injury_Start')
-                ax.plot(sorted_df['Injury_Start'], sorted_df['Rating'], marker='o')
-                ax.set_title(f"Rating Over Time for {player_to_analyze} (Matplotlib)")
-                ax.set_xlabel("Injury Start")
-                ax.set_ylabel("Rating")
+                fig, ax = plt.subplots(figsize=(8, 3))
+                sns.barplot(data=impact_df, x='Injury_Type', y='Impact_Index', palette="inferno", ax=ax)
+                ax.set_title("Average Impact Index (Matplotlib)")
+                plt.xticks(rotation=45)
                 plt.tight_layout()
                 render_matplotlib(fig)
 
-            st.markdown("---")
-            st.subheader("📈 Player Rating vs Team Goals: Before / During / After")
-            plot_df = player_df.sort_values('Injury_Start').reset_index(drop=True)
+    # ---------- Tab 5: Player Deep Dive ----------
+    with tabs[5]:
+        st.subheader("🔎 Player Deep Dive")
+        tab_mode = st.selectbox("Visualization mode for this tab (override)", options=["Auto", "Plotly", "Matplotlib"], index=0, key="tab_deep_mode")
+        tab_style = st.selectbox("Seaborn style for this tab (override)", options=["Auto", "Modern Clean", "Classic Analytics"], index=0, key="tab_deep_style")
+        mode = get_mode(tab_mode if tab_mode != "Auto" else None, global_mode)
+        style = get_style(tab_style if tab_style != "Auto" else None, global_style)
 
-            required_comparison = ['Avg_Rating_Before', 'Rating', 'Avg_Rating_After', 'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After']
-            if all(c in plot_df.columns for c in required_comparison):
+        player_to_analyze = st.selectbox("Select a Player to Analyze", options=sorted(df['Player'].unique()))
+        if player_to_analyze:
+            player_df = filtered_df[filtered_df['Player'] == player_to_analyze].copy()
+            st.markdown(f"### Analytics for: **{player_to_analyze}**")
+
+            if player_df.empty:
+                st.warning("No data for this player with the current filters.")
+            else:
+                kpi4, kpi5, kpi6 = st.columns(3)
+                kpi4.metric("⚽ Average Rating", f"{player_df['Rating'].mean():.2f}")
+                kpi5.metric("🩹 Total Injuries", f"{len(player_df)}")
+                kpi6.metric("⏳ Avg. Injury Duration (Days)", f"{player_df['Injury_Duration'].mean():.1f}")
+
+                st.subheader("Injury History")
+                display_cols = {
+                    'Injury_Start': 'From',
+                    'Injury_End': 'To',
+                    'Injury_Type': 'Injury',
+                    'Injury_Duration': 'Duration (Days)',
+                    'Team_Performance_Drop': 'Team Goal Drop',
+                    'Team_Recovery': 'Team Goal Recovery After'
+                }
+                # Check intersection of existing columns
+                valid_display = [c for c in display_cols.keys() if c in player_df.columns]
+                final_display_map = {k: v for k, v in display_cols.items() if k in valid_display}
+                
+                st.dataframe(player_df[list(final_display_map.keys())].rename(columns=final_display_map).sort_values(by='From', ascending=False), use_container_width=True)
+
+                st.subheader("Performance Timeline")
                 if mode == "Plotly":
-                    plot_df_melt = plot_df.melt(id_vars=['Injury_Start'], value_vars=required_comparison,
+                    fig_player = px.line(player_df.sort_values(by='Injury_Start'), x="Injury_Start", y="Rating", markers=True,
+                                         title=f"Rating Over Time for {player_to_analyze}")
+                    fig_player.update_traces(text=player_df['Rating'], textposition='top center', hovertemplate='Date: %{x}<br>Rating: %{y:.2f}')
+                    render_plotly(fig_player)
+                else:
+                    apply_seaborn_style(style)
+                    fig, ax = plt.subplots(figsize=(8, 4))
+                    sorted_df = player_df.sort_values('Injury_Start')
+                    ax.plot(sorted_df['Injury_Start'], sorted_df['Rating'], marker='o')
+                    ax.set_title(f"Rating Over Time for {player_to_analyze} (Matplotlib)")
+                    ax.set_xlabel("Injury Start")
+                    ax.set_ylabel("Rating")
+                    plt.tight_layout()
+                    render_matplotlib(fig)
+
+                st.markdown("---")
+                st.subheader("📈 Player Rating vs Team Goals: Before / During / After")
+                plot_df = player_df.sort_values('Injury_Start').reset_index(drop=True)
+
+                required_vars = ['Avg_Rating_Before', 'Rating', 'Avg_Rating_After',
+                                 'Team_Goals_Before', 'Team_Goals_During', 'Team_Goals_After']
+                # Filter metrics that exist in the dataframe
+                existing_vars = [v for v in required_vars if v in plot_df.columns]
+
+                if mode == "Plotly":
+                    plot_df_melt = plot_df.melt(id_vars=['Injury_Start'], value_vars=existing_vars,
                                                 var_name='Metric', value_name='Value')
                     label_map = {
                         'Avg_Rating_Before': 'Player Rating - Before',
@@ -543,7 +580,7 @@ with tabs[5]:
                         'Team_Goals_During': 'Team Goals - During',
                         'Team_Goals_After': 'Team Goals - After'
                     }
-                    plot_df_melt['Metric'] = plot_df_melt['Metric'].map(label_map)
+                    plot_df_melt['Metric'] = plot_df_melt['Metric'].map(label_map).fillna(plot_df_melt['Metric'])
                     fig_dynamic = px.line(plot_df_melt, x='Injury_Start', y='Value', color='Metric', markers=True,
                                           title=f"{player_to_analyze}: Rating vs Team Goals (Plotly)")
                     fig_dynamic.update_traces(mode='lines+markers')
@@ -561,9 +598,12 @@ with tabs[5]:
                     ax.set_xlabel('Injury Start')
 
                     ax2 = ax.twinx()
-                    ax2.plot(sorted_df['Injury_Start'], sorted_df['Team_Goals_Before'], marker='s', linestyle='--', label='Team Goals - Before', color='tab:green')
-                    ax2.plot(sorted_df['Injury_Start'], sorted_df['Team_Goals_During'], marker='s', linestyle='-', label='Team Goals - During', color='tab:orange')
-                    ax2.plot(sorted_df['Injury_Start'], sorted_df['Team_Goals_After'], marker='s', linestyle=':', label='Team Goals - After', color='tab:purple')
+                    if 'Team_Goals_Before' in sorted_df:
+                        ax2.plot(sorted_df['Injury_Start'], sorted_df['Team_Goals_Before'], marker='s', linestyle='--', label='Team Goals - Before', color='tab:green')
+                    if 'Team_Goals_During' in sorted_df:
+                        ax2.plot(sorted_df['Injury_Start'], sorted_df['Team_Goals_During'], marker='s', linestyle='-', label='Team Goals - During', color='tab:orange')
+                    if 'Team_Goals_After' in sorted_df:
+                        ax2.plot(sorted_df['Injury_Start'], sorted_df['Team_Goals_After'], marker='s', linestyle=':', label='Team Goals - After', color='tab:purple')
                     ax2.set_ylabel('Team Goals')
 
                     lines, labels = ax.get_legend_handles_labels()
@@ -578,16 +618,18 @@ with tabs[5]:
 # ---------------------
 with st.expander("ℹ️ About This Dashboard"):
     st.markdown("""
-    This dashboard supports both Plotly (interactive) and Matplotlib/Seaborn (static) visuals.
-    **Powered by:** User CSV Upload & Gemini AI.
-    Use the global toggles in the sidebar or override per-tab using the dropdowns at the top of each tab.
+    This dashboard analyzes player injury data.
+    - **Upload CSV:** You can upload your own data via the sidebar. 
+    - **Missing Data:** If your CSV lacks calculated fields (like Duration or Drops), the system attempts to calculate them for you.
+    - **Modes:** Switch between interactive Plotly charts and static Matplotlib/Seaborn publications style charts.
     """)
 
-st.download_button(
-    label="📥 Download Filtered Data as CSV",
-    data=filtered_df.to_csv(index=False).encode('utf-8'),
-    file_name="filtered_injury_impact_data.csv",
-    mime="text/csv"
-)
+if not filtered_df.empty:
+    st.download_button(
+        label="📥 Download Filtered Data as CSV",
+        data=filtered_df.to_csv(index=False).encode('utf-8'),
+        file_name="filtered_injury_impact_data.csv",
+        mime="text/csv"
+    )
 
-st.markdown("<hr><center>© 2025 FootLens Analytics | Powered by Gemini | Developed by Parkar</center>", unsafe_allow_html=True)
+st.markdown("<hr><center>© 2025 FootLens Analytics | Developed by Parkar</center>", unsafe_allow_html=True)
