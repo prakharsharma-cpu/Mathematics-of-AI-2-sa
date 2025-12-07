@@ -1,6 +1,6 @@
-# ============
-# ⚽ FootLens 
-# ============
+# ==================================
+# ⚽ FootLens - Robust Streamlit App (auto column-mapping)
+# ==================================
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.figure_factory as ff
 import matplotlib.pyplot as plt
 import seaborn as sns
+import re
 from io import StringIO
 
 # ---------------------
@@ -15,15 +16,40 @@ from io import StringIO
 # ---------------------
 st.set_page_config(page_title="⚽ FootLens", layout="wide", initial_sidebar_state="expanded")
 st.title("⚽ FootLens")
-st.markdown("Upload your CSV and explore injury impact analytics with automated EDA and interactive visualizations. "
-            "If you don't have a CSV, use the sample CSV download link in the sidebar.")
+st.markdown("Upload your CSV and explore injury impact analytics. This app automatically standardizes and maps columns so it works with many CSV header variants.")
 
 # ---------------------
-# Helpers & Utilities
+# Utilities: normalization & fuzzy mapping
 # ---------------------
-@st.cache_data
-def load_csv_bytes(uploaded_file):
-    return pd.read_csv(uploaded_file)
+def normalize_colname(name: str) -> str:
+    """Normalize a column name to a canonical form: lower, underscores, alnum only."""
+    if not isinstance(name, str):
+        return ""
+    s = name.strip().lower()
+    s = re.sub(r"[^\w\s]", "", s)          # remove punctuation
+    s = re.sub(r"\s+", "_", s)             # spaces -> underscore
+    return s
+
+def normalize_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    mapping = {c: normalize_colname(c) for c in df.columns}
+    df.rename(columns=mapping, inplace=True)
+    return df
+
+def find_column(df_cols, alternatives):
+    """Return the first matching column in df_cols found in alternatives (both normalized)."""
+    norm_cols = {normalize_colname(c): c for c in df_cols}
+    for alt in alternatives:
+        nalt = normalize_colname(alt)
+        if nalt in norm_cols:
+            return norm_cols[nalt]
+    # fallback: try partial contains matching
+    for alt in alternatives:
+        nalt = normalize_colname(alt)
+        for nc, orig in norm_cols.items():
+            if nalt in nc or nc in nalt:
+                return orig
+    return None
 
 def safe_mean(series):
     try:
@@ -64,7 +90,7 @@ def ensure_nonempty(df):
     return True
 
 def sample_csv_text():
-    csv = """Player,Club,Injury_Type,Injury_Start,Injury_End,Team_Goals_Before,Team_Goals_During,Team_Goals_After,Avg_Rating_Before,Avg_Rating_After,Rating
+    csv = """Player,Club,Injury Type,Injury Start,Injury End,Team Goals Before,Team Goals During,Team Goals After,Avg Rating Before,Avg Rating After,Rating
 John Doe,Example FC,Hamstring,2024-09-01,2024-09-21,1.2,0.6,1.0,7.1,6.9,6.9
 Jane Smith,Example FC,Ankle,2024-10-05,2024-10-20,1.5,1.0,1.4,7.5,7.3,7.4
 Alex Roe,Another United,ACL,2024-08-01,2024-11-01,1.0,0.2,0.8,6.9,7.0,6.95
@@ -75,12 +101,10 @@ Alex Roe,Another United,ACL,2024-08-01,2024-11-01,1.0,0.2,0.8,6.9,7.0,6.95
 # Sidebar: Upload + Settings
 # ---------------------
 st.sidebar.header("🔍 Upload & Settings")
-st.sidebar.markdown("Upload a CSV with injury & performance data. Recommended columns: "
-                    "`Player, Club, Injury_Type, Injury_Start, Injury_End, Team_Goals_Before, Team_Goals_During, Team_Goals_After, Avg_Rating_Before, Avg_Rating_After, Rating`.")
+st.sidebar.markdown("Upload a CSV. This app will attempt to map common column name variants (e.g., 'Injury Type' or 'injury_type').")
 
 sample_csv = sample_csv_text()
 st.sidebar.download_button("⬇️ Download sample CSV", data=sample_csv, file_name="footlens_sample.csv", mime="text/csv")
-
 uploaded_file = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
 
 # ---------------------
@@ -88,60 +112,87 @@ uploaded_file = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
 # ---------------------
 if uploaded_file:
     try:
-        df = load_csv_bytes(uploaded_file)
-        st.sidebar.success(f"Loaded {len(df)} records.")
+        df_raw = pd.read_csv(uploaded_file)
+        st.sidebar.success(f"Loaded {len(df_raw)} records from file.")
     except Exception as e:
         st.sidebar.error(f"Error reading CSV: {e}")
         st.stop()
 else:
     st.sidebar.info("No file uploaded — using sample dataset for demonstration.")
-    df = pd.read_csv(StringIO(sample_csv))
+    df_raw = pd.read_csv(StringIO(sample_csv))
 
 # ---------------------
-# Basic preprocessing
+# Normalize columns and keep mapping
 # ---------------------
-# defensive copy
-df = df.copy()
+df = df_raw.copy()
+original_columns = list(df.columns)
+df = normalize_df_columns(df)  # columns become normalized keys, but values remain same; store originals mapping
+# Build reverse mapping: normalized -> normalized (since df columns now normalized)
+df_cols = list(df.columns)
 
-# drop exact duplicates
-df.drop_duplicates(inplace=True)
+# For user clarity, show detected columns (normalized)
+with st.expander("Detected columns (normalized)", expanded=False):
+    st.write(df_cols)
 
-# standardize column names (strip)
-df.columns = [c.strip() for c in df.columns]
+# ---------------------
+# Attempt fuzzy mapping to expected fields
+# ---------------------
+expected_alternatives = {
+    "player": ["player", "player_name", "name"],
+    "club": ["club", "team", "club_name", "team_name"],
+    "injury_type": ["injury_type", "injury type", "injury", "injurytype", "type_of_injury"],
+    "injury_start": ["injury_start", "injury start", "start_date", "start", "injury_start_date", "startdate"],
+    "injury_end": ["injury_end", "injury end", "end_date", "end", "injury_end_date", "enddate"],
+    "team_goals_before": ["team_goals_before", "team goals before", "goals_before", "goals before", "goals_before_match"],
+    "team_goals_during": ["team_goals_during", "team goals during", "goals_during", "goals during"],
+    "team_goals_after": ["team_goals_after", "team goals after", "goals_after", "goals after"],
+    "avg_rating_before": ["avg_rating_before", "avg rating before", "avg_rating_before_match", "average_rating_before"],
+    "avg_rating_after": ["avg_rating_after", "avg rating after", "average_rating_after"],
+    "rating": ["rating", "player_rating", "rating_overall", "avg_rating"]
+}
 
-# convert date columns if present
-for date_col in ["Injury_Start","Injury_End"]:
-    if date_col in df.columns:
-        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+mapped = {}
+for key, alts in expected_alternatives.items():
+    found = find_column(df.columns, alts)
+    mapped[key] = found  # may be None
 
-# fill numeric NaNs with column mean (but keep NaN for derived metrics if needed)
-numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-for col in numeric_cols:
-    if df[col].isnull().any():
-        df[col] = df[col].fillna(df[col].mean())
+# ---------------------
+# Preprocessing & derived metrics (use mapped names)
+# ---------------------
+# Convert date-like columns
+if mapped["injury_start"]:
+    df[mapped["injury_start"]] = pd.to_datetime(df[mapped["injury_start"]], errors="coerce")
+if mapped["injury_end"]:
+    df[mapped["injury_end"]] = pd.to_datetime(df[mapped["injury_end"]], errors="coerce")
+
+# fill numeric NaNs in numeric columns
+num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+for c in num_cols:
+    if df[c].isnull().any():
+        df[c] = df[c].fillna(df[c].mean())
 
 # Derived metrics
-if all(c in df.columns for c in ["Injury_Start","Injury_End"]):
-    df['Injury_Duration'] = (df['Injury_End'] - df['Injury_Start']).dt.days.clip(lower=0)
-    df['Month'] = df['Injury_Start'].dt.month
+if mapped["injury_start"] and mapped["injury_end"]:
+    df["injury_duration_days"] = (df[mapped["injury_end"]] - df[mapped["injury_start"]]).dt.days.clip(lower=0)
+    df["injury_month"] = df[mapped["injury_start"]].dt.month
 else:
-    df['Injury_Duration'] = np.nan
-    df['Month'] = np.nan
+    df["injury_duration_days"] = np.nan
+    df["injury_month"] = np.nan
 
-if all(c in df.columns for c in ["Team_Goals_Before","Team_Goals_During"]):
-    df['Team_Performance_Drop'] = df['Team_Goals_Before'] - df['Team_Goals_During']
+if mapped["team_goals_before"] and mapped["team_goals_during"]:
+    df["team_performance_drop"] = df[mapped["team_goals_before"]] - df[mapped["team_goals_during"]]
 else:
-    df['Team_Performance_Drop'] = np.nan
+    df["team_performance_drop"] = np.nan
 
-if all(c in df.columns for c in ["Team_Goals_During","Team_Goals_After"]):
-    df['Team_Recovery'] = df['Team_Goals_After'] - df['Team_Goals_During']
+if mapped["team_goals_during"] and mapped["team_goals_after"]:
+    df["team_recovery"] = df[mapped["team_goals_after"]] - df[mapped["team_goals_during"]]
 else:
-    df['Team_Recovery'] = np.nan
+    df["team_recovery"] = np.nan
 
-if all(c in df.columns for c in ["Avg_Rating_Before","Avg_Rating_After"]):
-    df['Performance_Change'] = df['Avg_Rating_After'] - df['Avg_Rating_Before']
+if mapped["avg_rating_before"] and mapped["avg_rating_after"]:
+    df["performance_change"] = df[mapped["avg_rating_after"]] - df[mapped["avg_rating_before"]]
 else:
-    df['Performance_Change'] = np.nan
+    df["performance_change"] = np.nan
 
 # ---------------------
 # Sidebar: Filters + Mode/Style
@@ -149,30 +200,34 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.header("Filters & Visualization Settings")
 
-filter_club = st.sidebar.multiselect("Club", options=sorted(df['Club'].dropna().unique()) if 'Club' in df.columns else [], default=sorted(df['Club'].dropna().unique()) if 'Club' in df.columns else [])
-filter_player = st.sidebar.multiselect("Player", options=sorted(df['Player'].dropna().unique()) if 'Player' in df.columns else [], default=sorted(df['Player'].dropna().unique()) if 'Player' in df.columns else [])
-filter_injury = st.sidebar.multiselect("Injury Type", options=sorted(df['Injury_Type'].dropna().unique()) if 'Injury_Type' in df.columns else [], default=sorted(df['Injury_Type'].dropna().unique()) if 'Injury_Type' in df.columns else [])
+club_options = sorted(df[mapped["club"]].dropna().unique()) if mapped["club"] else []
+player_options = sorted(df[mapped["player"]].dropna().unique()) if mapped["player"] else []
+injury_options = sorted(df[mapped["injury_type"]].dropna().unique()) if mapped["injury_type"] else []
+
+filter_club = st.sidebar.multiselect("Club", options=club_options, default=club_options)
+filter_player = st.sidebar.multiselect("Player", options=player_options, default=player_options)
+filter_injury = st.sidebar.multiselect("Injury Type", options=injury_options, default=injury_options)
 
 global_mode = st.sidebar.radio("🧭 Global Visualization Mode", ["Plotly","Matplotlib"], index=0)
 st.sidebar.markdown("---")
 st.sidebar.markdown("Seaborn Theme (Matplotlib)")
 global_style = st.sidebar.radio("Global Seaborn Style", ["Modern Clean","Classic Analytics"], index=0)
 
-# Apply filters (defensive)
+# Apply filters defensively
 filtered_df = df.copy()
-if 'Club' in df.columns and filter_club:
-    filtered_df = filtered_df[filtered_df['Club'].isin(filter_club)]
-if 'Player' in df.columns and filter_player:
-    filtered_df = filtered_df[filtered_df['Player'].isin(filter_player)]
-if 'Injury_Type' in df.columns and filter_injury:
-    filtered_df = filtered_df[filtered_df['Injury_Type'].isin(filter_injury)]
+if mapped["club"] and filter_club:
+    filtered_df = filtered_df[filtered_df[mapped["club"]].isin(filter_club)]
+if mapped["player"] and filter_player:
+    filtered_df = filtered_df[filtered_df[mapped["player"]].isin(filter_player)]
+if mapped["injury_type"] and filter_injury:
+    filtered_df = filtered_df[filtered_df[mapped["injury_type"]].isin(filter_injury)]
 
 # ---------------------
 # KPIs
 # ---------------------
 kpi1, kpi2, kpi3 = st.columns(3)
-avg_rating = safe_mean(filtered_df['Rating']) if 'Rating' in filtered_df.columns else np.nan
-avg_drop = safe_mean(filtered_df['Team_Performance_Drop']) if 'Team_Performance_Drop' in filtered_df.columns else np.nan
+avg_rating = safe_mean(filtered_df[mapped["rating"]]) if mapped["rating"] else np.nan
+avg_drop = safe_mean(filtered_df["team_performance_drop"]) if "team_performance_drop" in filtered_df.columns else np.nan
 total_injuries = len(filtered_df)
 kpi1.metric("⚽ Avg Rating", f"{avg_rating:.2f}" if not np.isnan(avg_rating) else "N/A")
 kpi2.metric("💥 Avg Team Performance Drop", f"{avg_drop:.2f}" if not np.isnan(avg_drop) else "N/A")
@@ -197,7 +252,7 @@ tabs = st.tabs([
 # =====================================
 with tabs[0]:
     st.subheader("📄 Dataset Preview")
-    st.write("First 10 rows (after filters):")
+    st.write("First 10 rows (after normalization & filters):")
     if ensure_nonempty(filtered_df):
         st.dataframe(filtered_df.head(10), use_container_width=True)
         st.write(f"**Total Records:** {filtered_df.shape[0]} | **Columns:** {filtered_df.shape[1]}")
@@ -224,7 +279,7 @@ with tabs[1]:
         st.stop()
 
     numeric_cols = filtered_df.select_dtypes(include=np.number).columns.tolist()
-    categorical_cols = filtered_df.select_dtypes(exclude=np.number).columns.tolist()
+    categorical_cols = [c for c in filtered_df.select_dtypes(exclude=np.number).columns.tolist() if c not in [mapped.get(k) for k in mapped.keys()] or c in [mapped.get("player"), mapped.get("club"), mapped.get("injury_type")] ]
 
     # Correlation Heatmap
     if numeric_cols:
@@ -278,10 +333,9 @@ with tabs[1]:
     else:
         st.info("No numeric columns to show distributions for.")
 
-    # Boxplots by categorical features
+    # Boxplots by categorical features (limited combinations)
     if numeric_cols and categorical_cols:
         st.markdown("### 📦 Boxplots by Categorical Features")
-        # to avoid explosion, limit combinations
         max_combinations = 12
         combos_shown = 0
         for num_col in numeric_cols:
@@ -312,21 +366,24 @@ with tabs[1]:
     else:
         st.info("Not enough numeric/categorical columns to plot boxplots.")
 
-    # Top injury types by team performance drop
-    if 'Injury_Type' in filtered_df.columns and 'Team_Performance_Drop' in filtered_df.columns:
+    # Top injury types by team performance drop (safe check)
+    inj_col = mapped["injury_type"]
+    if inj_col and "team_performance_drop" in filtered_df.columns:
         st.markdown("### 🩹 Top 10 Injuries by Avg Team Performance Drop")
-        top_injuries = filtered_df.groupby('Injury_Type')['Team_Performance_Drop'].mean().sort_values(ascending=False).head(10).reset_index()
+        top_injuries = filtered_df.groupby(inj_col)["team_performance_drop"].mean().sort_values(ascending=False).head(10).reset_index()
+        # Ensure column names in plot match dataframe
+        top_injuries = top_injuries.rename(columns={inj_col: "injury_type", "team_performance_drop": "avg_drop"})
         if mode=="Plotly":
-            fig = px.bar(top_injuries, x='Team_Performance_Drop', y='Injury_Type', orientation='h', color='Team_Performance_Drop', title="Top injuries by team performance drop", labels={'Team_Performance_Drop':'Avg Drop','Injury_Type':'Injury'})
+            fig = px.bar(top_injuries, x='avg_drop', y='injury_type', orientation='h', title="Top injuries by team performance drop", labels={'avg_drop':'Avg Drop','injury_type':'Injury'})
             render_plotly(fig)
         else:
             apply_seaborn_style(style)
             fig, ax = plt.subplots(figsize=(8,4))
-            sns.barplot(data=top_injuries, y='Injury_Type', x='Team_Performance_Drop', ax=ax)
+            sns.barplot(data=top_injuries, y='injury_type', x='avg_drop', ax=ax)
             ax.set_title("Top injuries by team performance drop")
             plt.tight_layout(); render_matplotlib(fig)
     else:
-        st.info("Columns 'Injury_Type' or 'Team_Performance_Drop' missing; cannot compute top injuries by drop.")
+        st.info("Columns for injury impact by drop missing (injury type or team performance metrics).")
 
 # =====================================
 # Tab 2: Player Impact
@@ -336,26 +393,25 @@ with tabs[2]:
     if not ensure_nonempty(filtered_df):
         st.stop()
 
-    # summarize by player
-    if 'Player' in filtered_df.columns:
-        player_summary = filtered_df.groupby('Player').agg(
-            Injuries=('Player','count'),
-            Avg_Injury_Duration=('Injury_Duration', lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan),
-            Avg_Perf_Change=('Performance_Change', lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan),
-            Avg_Rating=('Rating', lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan)
+    if mapped["player"]:
+        player = mapped["player"]
+        player_summary = filtered_df.groupby(player).agg(
+            Injuries=(player,'count'),
+            Avg_Injury_Duration=("injury_duration_days", lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan),
+            Avg_Perf_Change=("performance_change", lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan),
+            Avg_Rating=(mapped["rating"] if mapped["rating"] else player, lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan)  # fallback
         ).reset_index().sort_values('Injuries', ascending=False)
         st.dataframe(player_summary.head(50), use_container_width=True)
 
-        # Top impacted players (by avg drop or perf change)
-        st.markdown("### Players with largest average performance change (drop)")
-        if 'Performance_Change' in filtered_df.columns:
+        st.markdown("### Players with largest average performance change (most negative)")
+        if "performance_change" in filtered_df.columns and not filtered_df["performance_change"].isnull().all():
             tmp = player_summary.sort_values('Avg_Perf_Change').head(10).reset_index(drop=True)
-            fig = px.bar(tmp, x='Avg_Perf_Change', y='Player', orientation='h', title="Players with largest negative performance change")
+            fig = px.bar(tmp, x='Avg_Perf_Change', y=player, orientation='h', title="Players with largest negative performance change")
             render_plotly(fig)
         else:
-            st.info("No 'Performance_Change' column available.")
+            st.info("No 'performance_change' values available.")
     else:
-        st.info("No 'Player' column in dataset to compute player-level impact.")
+        st.info("No player column detected to compute player-level impact.")
 
 # =====================================
 # Tab 3: Club Analysis
@@ -365,19 +421,19 @@ with tabs[3]:
     if not ensure_nonempty(filtered_df):
         st.stop()
 
-    if 'Club' in filtered_df.columns:
-        club_summary = filtered_df.groupby('Club').agg(
-            Injuries=('Club','count'),
-            Avg_Injury_Duration=('Injury_Duration', lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan),
-            Avg_Team_Drop=('Team_Performance_Drop', lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan)
+    if mapped["club"]:
+        club = mapped["club"]
+        club_summary = filtered_df.groupby(club).agg(
+            Injuries=(club,'count'),
+            Avg_Injury_Duration=("injury_duration_days", lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan),
+            Avg_Team_Drop=("team_performance_drop", lambda s: np.nanmean(s) if len(s.dropna())>0 else np.nan)
         ).reset_index().sort_values('Injuries', ascending=False)
         st.dataframe(club_summary, use_container_width=True)
 
-        # top clubs by injuries
-        fig = px.bar(club_summary.sort_values('Injuries',ascending=False).head(15), x='Injuries', y='Club', orientation='h', title="Top clubs by injury count")
+        fig = px.bar(club_summary.sort_values('Injuries',ascending=False).head(15), x='Injuries', y=club, orientation='h', title="Top clubs by injury count")
         render_plotly(fig)
     else:
-        st.info("No 'Club' column available to show club-level analysis.")
+        st.info("No club column detected for club-level analysis.")
 
 # =====================================
 # Tab 4: Injury Analysis
@@ -387,31 +443,37 @@ with tabs[4]:
     if not ensure_nonempty(filtered_df):
         st.stop()
 
-    # Injury counts by type
-    if 'Injury_Type' in filtered_df.columns:
-        inj_counts = filtered_df['Injury_Type'].value_counts().reset_index().rename(columns={'index':'Injury_Type','Injury_Type':'Count'})
+    inj_col = mapped["injury_type"]
+    # Injury counts by type (safe)
+    if inj_col and inj_col in filtered_df.columns:
+        inj_counts = filtered_df[inj_col].value_counts().reset_index()
+        inj_counts.columns = ["injury_type", "count"]
         st.markdown("### Injury counts by type")
-        fig = px.bar(inj_counts.head(30), x='Count', y='Injury_Type', orientation='h', title="Injury counts")
-        render_plotly(fig)
+        # Plotly expects the DataFrame to have 'count' and 'injury_type'
+        try:
+            fig = px.bar(inj_counts.head(30), x='count', y='injury_type', orientation='h', title="Injury counts")
+            render_plotly(fig)
+        except Exception as e:
+            st.error(f"Could not create injury counts bar: {e}")
     else:
-        st.info("No 'Injury_Type' column to show injury distribution.")
+        st.info("No injury type column available to show injury distribution.")
 
     # Injury duration distribution
-    if 'Injury_Duration' in filtered_df.columns and not filtered_df['Injury_Duration'].isnull().all():
-        st.markdown("### Injury duration distribution")
-        fig = px.histogram(filtered_df, x='Injury_Duration', nbins=30, title="Injury duration (days)")
+    if "injury_duration_days" in filtered_df.columns and not filtered_df["injury_duration_days"].isnull().all():
+        st.markdown("### Injury duration distribution (days)")
+        fig = px.histogram(filtered_df, x='injury_duration_days', nbins=30, title="Injury duration (days)")
         render_plotly(fig)
     else:
-        st.info("No 'Injury_Duration' values to show distribution.")
+        st.info("No injury duration information available (needs start & end dates).")
 
-    # Monthly trend of injuries (if date present)
-    if 'Month' in filtered_df.columns and not filtered_df['Month'].isnull().all():
-        monthly = filtered_df.groupby('Month').size().reset_index(name='Count').sort_values('Month')
+    # Monthly trend of injuries (if present)
+    if "injury_month" in filtered_df.columns and not filtered_df["injury_month"].isnull().all():
+        monthly = filtered_df.groupby("injury_month").size().reset_index(name='count').sort_values('injury_month')
         st.markdown("### Monthly injury counts")
-        fig = px.line(monthly, x='Month', y='Count', markers=True, title="Injuries by month")
+        fig = px.line(monthly, x='injury_month', y='count', markers=True, title="Injuries by month")
         render_plotly(fig)
     else:
-        st.info("No date information to compute monthly trends (Injury_Start missing).")
+        st.info("No date information to compute monthly trends (Injury start missing).")
 
 # =====================================
 # Tab 5: Player Deep Dive
@@ -421,43 +483,48 @@ with tabs[5]:
     if not ensure_nonempty(filtered_df):
         st.stop()
 
-    if 'Player' in filtered_df.columns:
-        player_options = sorted(filtered_df['Player'].dropna().unique())
-        selected_player = st.selectbox("Select player", options=player_options)
-        player_df = filtered_df[filtered_df['Player']==selected_player]
-        st.write(f"Showing {len(player_df)} record(s) for **{selected_player}**")
-
-        with st.expander("Player raw records", expanded=False):
-            st.dataframe(player_df, use_container_width=True)
-
-        # Player timeline: injury durations on a Gantt-like bar (Plotly)
-        if 'Injury_Start' in player_df.columns and player_df['Injury_Start'].notna().any():
-            timeline_df = player_df.copy()
-            timeline_df['start'] = timeline_df['Injury_Start']
-            timeline_df['end'] = timeline_df['Injury_End'].fillna(timeline_df['Injury_Start'])
-            timeline_df['Injury_Label'] = timeline_df.apply(lambda r: f"{r.get('Injury_Type','Unknown')} ({r.get('Injury_Duration', '')}d)", axis=1)
-            try:
-                fig = px.timeline(timeline_df, x_start="start", x_end="end", y="Injury_Label", title=f"Injury timeline for {selected_player}")
-                fig.update_yaxes(autorange="reversed")
-                render_plotly(fig)
-            except Exception as e:
-                st.error(f"Could not render timeline: {e}")
+    if mapped["player"]:
+        player_col = mapped["player"]
+        options = sorted(filtered_df[player_col].dropna().unique())
+        if not options:
+            st.info("No players found after filtering.")
         else:
-            st.info("No Injury_Start dates for this player to create a timeline.")
+            selected_player = st.selectbox("Select player", options=options)
+            player_df = filtered_df[filtered_df[player_col]==selected_player]
+            st.write(f"Showing {len(player_df)} record(s) for **{selected_player}**")
 
-        # Performance before/after scatter
-        if all(c in player_df.columns for c in ['Avg_Rating_Before','Avg_Rating_After']):
-            fig = px.scatter(player_df, x='Avg_Rating_Before', y='Avg_Rating_After', hover_data=['Injury_Type','Injury_Duration'], title=f"Before vs After ratings for {selected_player}")
-            render_plotly(fig)
-        else:
-            st.info("Avg_Rating_Before/Avg_Rating_After columns missing for before/after analysis.")
+            with st.expander("Player raw records", expanded=False):
+                st.dataframe(player_df, use_container_width=True)
 
+            # Timeline (if dates)
+            if mapped["injury_start"] and player_df[mapped["injury_start"]].notna().any():
+                timeline_df = player_df.copy()
+                timeline_df["start"] = timeline_df[mapped["injury_start"]]
+                timeline_df["end"] = timeline_df[mapped["injury_end"]].fillna(timeline_df[mapped["injury_start"]]) if mapped["injury_end"] else timeline_df[mapped["injury_start"]]
+                timeline_df["label"] = timeline_df.get(mapped["injury_type"], "injury").astype(str) + " (" + timeline_df["injury_duration_days"].astype(str) + "d)"
+                try:
+                    fig = px.timeline(timeline_df, x_start="start", x_end="end", y="label", title=f"Injury timeline for {selected_player}")
+                    fig.update_yaxes(autorange="reversed")
+                    render_plotly(fig)
+                except Exception as e:
+                    st.error(f"Could not render timeline: {e}")
+            else:
+                st.info("No injury start dates for this player to create a timeline.")
+
+            # Before vs After scatter
+            if mapped["avg_rating_before"] and mapped["avg_rating_after"]:
+                if mapped["avg_rating_before"] in player_df.columns and mapped["avg_rating_after"] in player_df.columns:
+                    fig = px.scatter(player_df, x=mapped["avg_rating_before"], y=mapped["avg_rating_after"], hover_data=[mapped.get("injury_type"), "injury_duration_days"], title=f"Before vs After ratings for {selected_player}")
+                    render_plotly(fig)
+                else:
+                    st.info("Before/after rating columns not present for this player.")
+            else:
+                st.info("Avg rating before/after columns not available for before/after analysis.")
     else:
-        st.info("No 'Player' column in dataset to do player deep dive.")
+        st.info("No 'player' column detected to do player deep dive.")
 
 # ---------------------
 # Footer / Tips
 # ---------------------
 st.markdown("---")
-st.caption("Tip: If you see 'N/A' or missing charts, check your CSV column names and date formats. "
-           "Recommended date format: YYYY-MM-DD. For large datasets, apply filters to speed up plotting.")
+st.caption("Tip: If charts say 'No column available', check your CSV headers. This app normalizes many common variants but if your dataset uses very different names, rename them or share the header list.")
