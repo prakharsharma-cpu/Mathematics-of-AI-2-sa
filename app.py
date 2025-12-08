@@ -10,19 +10,47 @@ st.markdown("""
 This interactive dashboard helps visualize the impact of player injuries on team performance and match outcomes.
 """)
 
-# --- Load Dataset with Error Handling ---
+# --- Load Dataset with caching ---
 @st.cache_data
 def load_data(file_path):
-    if not os.path.exists(file_path):
-        st.error(f"Dataset file not found: {file_path}")
-        st.stop()  # Stop execution if file not found
-    df = pd.read_csv(file_path)
+    try:
+        df = pd.read_csv(file_path)
+    except FileNotFoundError:
+        # Return None if file not found
+        return None
     return df
 
-# Path to your CSV dataset
-dataset_path = "football_injuries.csv"  # Make sure the file is in the same folder
-
+dataset_path = "football_injuries.csv"
 df = load_data(dataset_path)
+
+# --- Handle missing dataset ---
+if df is None:
+    st.warning(f"Dataset '{dataset_path}' not found. Generating a sample dataset for demo purposes.")
+    import numpy as np
+    # Create sample dataset
+    seasons = ["2022-23", "2023-24"]
+    teams = ["Team A", "Team B", "Team C"]
+    players = ["Player 1", "Player 2", "Player 3", "Player 4", "Player 5"]
+    
+    data = []
+    for season in seasons:
+        for team in teams:
+            for player in players:
+                data.append({
+                    "season": season,
+                    "team": team,
+                    "player_name": player,
+                    "matches_played": np.random.randint(5, 38),
+                    "injuries": np.random.randint(0, 5),
+                    "goals_scored": np.random.randint(0, 20),
+                    "assists": np.random.randint(0, 10),
+                    "wins": np.random.randint(0, 20),
+                    "draws": np.random.randint(0, 10),
+                    "losses": np.random.randint(0, 20),
+                    "points": np.random.randint(0, 60)
+                })
+    df = pd.DataFrame(data)
+    st.info("Sample dataset generated successfully!")
 
 # --- Sidebar Filters ---
 st.sidebar.header("Filters")
