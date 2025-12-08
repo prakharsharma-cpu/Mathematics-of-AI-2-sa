@@ -16,50 +16,39 @@ st.markdown("""
 """)
 
 # ------------------------------
-# Upload CSV Dataset
-# ------------------------------
-st.sidebar.header("Upload CSV")
-uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv")
-
-if uploaded_file is None:
-    st.warning("Please upload a CSV file to use the dashboard.")
-    st.stop()
-
-# ------------------------------
-# Load & Preprocess Data
+# Load Dataset DIRECTLY (no upload needed)
 # ------------------------------
 @st.cache_data
-def load_data(file):
-    df = pd.read_csv(file)
-    
-    # Parse match_date if exists
+def load_data():
+    df = pd.read_csv("player_injuries_fixed.csv")
+
+    # Parse match_date
     if 'match_date' in df.columns:
         df['match_date'] = pd.to_datetime(df['match_date'], errors='coerce', dayfirst=True)
     else:
-        st.warning("Warning: 'match_date' column not found in CSV. Some visualizations may not work.")
         df['match_date'] = pd.NaT
-    
-    # Ensure numeric columns exist
+
+    # Ensure numeric columns
     numeric_cols = ['performance_before', 'performance_after', 'age']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         else:
             df[col] = np.nan
-    
-    # Compute performance drop and rating improvement
+
+    # Compute performance metrics
     df['performance_drop'] = df.get('performance_before', 0) - df.get('performance_after', 0)
     df['rating_improvement'] = df.get('performance_after', 0) - df.get('performance_before', 0)
-    
-    # Add month column for heatmap
+
+    # Extract month
     if 'match_date' in df.columns:
         df['month'] = df['match_date'].dt.month
     else:
         df['month'] = np.nan
-    
+
     return df
 
-df = load_data(uploaded_file)
+df = load_data()
 
 # ------------------------------
 # Sidebar Filters
@@ -76,7 +65,7 @@ selected_season = st.sidebar.multiselect("Select Season(s)", options=seasons, de
 
 df_filtered = df.copy()
 
-# Apply filters only if column exists and selection is non-empty
+# Apply filters
 if 'club' in df_filtered.columns and selected_club:
     df_filtered = df_filtered[df_filtered['club'].isin(selected_club)]
 
@@ -117,10 +106,10 @@ else:
 # Visualization 2: Player Performance Timeline
 # ------------------------------
 st.subheader("Player Performance Timeline (Before & After Injury)")
-if 'player_name' in df_filtered.columns and ('performance_before' in df_filtered.columns or 'performance_after' in df_filtered.columns):
+if 'player_name' in df_filtered.columns:
     player_name = st.selectbox("Select Player to View Timeline", df_filtered['player_name'].unique())
     player_df = df_filtered[df_filtered['player_name'] == player_name].sort_values('match_date')
-    
+
     fig_line = go.Figure()
     if 'performance_before' in player_df.columns:
         fig_line.add_trace(go.Scatter(
@@ -132,9 +121,13 @@ if 'player_name' in df_filtered.columns and ('performance_before' in df_filtered
             x=player_df['match_date'], y=player_df['performance_after'],
             mode='lines+markers', name='Performance After Injury'
         ))
+
     if fig_line.data:
-        fig_line.update_layout(title=f"{player_name} Performance Timeline",
-                               xaxis_title="Match Date", yaxis_title="Performance Rating")
+        fig_line.update_layout(
+            title=f"{player_name} Performance Timeline",
+            xaxis_title="Match Date",
+            yaxis_title="Performance Rating"
+        )
         st.plotly_chart(fig_line, use_container_width=True)
     else:
         st.info("No performance data available for this player.")
