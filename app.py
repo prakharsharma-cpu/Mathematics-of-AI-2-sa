@@ -65,18 +65,26 @@ df = load_data(uploaded_file)
 # Sidebar Filters
 # ------------------------------
 st.sidebar.header("Filters")
-clubs = df['club'].dropna().unique() if 'club' in df.columns else []
-players = df['player_name'].dropna().unique() if 'player_name' in df.columns else []
-seasons = df['season'].dropna().unique() if 'season' in df.columns else []
+
+clubs = df['club'].dropna().unique().tolist() if 'club' in df.columns else []
+players = df['player_name'].dropna().unique().tolist() if 'player_name' in df.columns else []
+seasons = df['season'].dropna().unique().tolist() if 'season' in df.columns else []
 
 selected_club = st.sidebar.multiselect("Select Club(s)", options=clubs, default=clubs)
 selected_player = st.sidebar.multiselect("Select Player(s)", options=players, default=players)
 selected_season = st.sidebar.multiselect("Select Season(s)", options=seasons, default=seasons)
 
 df_filtered = df.copy()
-if clubs: df_filtered = df_filtered[df_filtered['club'].isin(selected_club)]
-if players: df_filtered = df_filtered[df_filtered['player_name'].isin(selected_player)]
-if seasons: df_filtered = df_filtered[df_filtered['season'].isin(selected_season)]
+
+# Apply filters only if column exists and selection is non-empty
+if 'club' in df_filtered.columns and selected_club:
+    df_filtered = df_filtered[df_filtered['club'].isin(selected_club)]
+
+if 'player_name' in df_filtered.columns and selected_player:
+    df_filtered = df_filtered[df_filtered['player_name'].isin(selected_player)]
+
+if 'season' in df_filtered.columns and selected_season:
+    df_filtered = df_filtered[df_filtered['season'].isin(selected_season)]
 
 if df_filtered.empty:
     st.info("No data available for the selected filters.")
