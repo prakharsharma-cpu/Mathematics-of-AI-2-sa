@@ -119,3 +119,30 @@ def preprocess_matches(df_raw):
 st.title("⚽ FootLens — Injuries vs Team Performance Dashboard")
 df_raw = load_sample_data(400)
 team_level = preprocess_matches(df_raw)
+
+# --- Dashboard visualizations ---------------------------------------
+
+# KPIs
+st.subheader("Overview")
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Matches", len(team_level['match_id'].unique()))
+col2.metric("Average Injuries per Team-Match", round(team_level['injuries'].mean(), 2))
+col3.metric("Average Minutes Lost per Team-Match", int(team_level['minutes_lost'].mean()))
+
+# Time series: rolling injuries
+st.subheader("Injuries over Time")
+top_teams = team_level['team'].unique()[:5]
+fig = px.line(team_level[team_level['team'].isin(top_teams)], 
+              x='match_date', y='injuries_rolling3', color='team',
+              title="Rolling 3-Match Injuries for Top Teams")
+st.plotly_chart(fig, use_container_width=True)
+
+# Scatter: avg injuries vs points
+st.subheader("Injuries vs Points")
+agg = team_level.groupby('team').agg(avg_injuries=('injuries', 'mean'), avg_points=('points', 'mean')).reset_index()
+fig2 = px.scatter(agg, x='avg_injuries', y='avg_points', text='team', size='avg_points', title="Avg Injuries vs Avg Points")
+st.plotly_chart(fig2, use_container_width=True)
+
+# Raw data preview
+st.subheader("Team-Level Data")
+st.dataframe(team_level.head(50))
