@@ -1,8 +1,4 @@
-# Core
-streamlit==1.26.0
-pandas==2.1.1
-numpy==1.27.5
-
-# Visualizations
-plotly==5.20.0
-
+streamlit
+pandas
+numpy
+plotly
