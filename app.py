@@ -16,32 +16,53 @@ st.markdown("""
 """)
 
 # ------------------------------
-# Load Dataset
+# Upload CSV Dataset
+# ------------------------------
+st.sidebar.header("Upload CSV")
+uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv")
+
+if uploaded_file is None:
+    st.warning("Please upload a CSV file to use the dashboard.")
+    st.stop()
+
+# ------------------------------
+# Load & Preprocess Data
 # ------------------------------
 @st.cache_data
-def load_data():
-    # Replace with your CSV file path
-    df = pd.read_csv('player_injuries.csv', parse_dates=['match_date'])
+def load_data(file):
+    df = pd.read_csv(file, parse_dates=['match_date'], dayfirst=True)
     
     # Ensure numeric columns exist
-    df['performance_before'] = pd.to_numeric(df['performance_before'], errors='coerce')
-    df['performance_after'] = pd.to_numeric(df['performance_after'], errors='coerce')
-    df['age'] = pd.to_numeric(df['age'], errors='coerce')
+    numeric_cols = ['performance_before', 'performance_after', 'age']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        else:
+            df[col] = np.nan  # If missing, fill with NaN
     
-    # Create performance drop
+    # Compute performance drop
     df['performance_drop'] = df['performance_before'] - df['performance_after']
+    
+    # Compute rating improvement (for comeback leaderboard)
+    df['rating_improvement'] = df['performance_after'] - df['performance_before']
+    
+    # Add month column for heatmap
+    if 'match_date' in df.columns:
+        df['month'] = df['match_date'].dt.month
+    else:
+        df['month'] = np.nan
     
     return df
 
-df = load_data()
+df = load_data(uploaded_file)
 
 # ------------------------------
 # Sidebar Filters
 # ------------------------------
 st.sidebar.header("Filters")
-clubs = df['club'].unique()
-players = df['player_name'].unique()
-seasons = df['season'].unique()
+clubs = df['club'].dropna().unique()
+players = df['player_name'].dropna().unique()
+seasons = df['season'].dropna().unique()
 
 selected_club = st.sidebar.multiselect("Select Club(s)", options=clubs, default=clubs)
 selected_player = st.sidebar.multiselect("Select Player(s)", options=players, default=players)
@@ -53,8 +74,12 @@ df_filtered = df[
     (df['season'].isin(selected_season))
 ]
 
+if df_filtered.empty:
+    st.info("No data available for the selected filters.")
+    st.stop()
+
 # ------------------------------
-# Visualization 1: Top 10 Injuries by Team Performance Drop
+# Visualization 1: Top 10 Injuries by Performance Drop
 # ------------------------------
 st.subheader("Top 10 Injuries Causing Highest Team Performance Drop")
 injury_impact = df_filtered.groupby('injury_type')['performance_drop'].mean().sort_values(ascending=False).head(10).reset_index()
@@ -73,25 +98,22 @@ st.plotly_chart(fig_bar, use_container_width=True)
 # Visualization 2: Player Performance Timeline
 # ------------------------------
 st.subheader("Player Performance Timeline (Before & After Injury)")
-if df_filtered.empty:
-    st.info("No data for selected filters.")
-else:
-    player_name = st.selectbox("Select Player to View Timeline", df_filtered['player_name'].unique())
-    player_df = df_filtered[df_filtered['player_name'] == player_name].sort_values('match_date')
+player_name = st.selectbox("Select Player to View Timeline", df_filtered['player_name'].unique())
+player_df = df_filtered[df_filtered['player_name'] == player_name].sort_values('match_date')
 
-    fig_line = go.Figure()
-    fig_line.add_trace(go.Scatter(x=player_df['match_date'], y=player_df['performance_before'],
-                                  mode='lines+markers', name='Performance Before Injury'))
-    fig_line.add_trace(go.Scatter(x=player_df['match_date'], y=player_df['performance_after'],
-                                  mode='lines+markers', name='Performance After Injury'))
-    fig_line.update_layout(title=f"{player_name} Performance Timeline", xaxis_title="Match Date", yaxis_title="Performance Rating")
-    st.plotly_chart(fig_line, use_container_width=True)
+fig_line = go.Figure()
+fig_line.add_trace(go.Scatter(x=player_df['match_date'], y=player_df['performance_before'],
+                              mode='lines+markers', name='Performance Before Injury'))
+fig_line.add_trace(go.Scatter(x=player_df['match_date'], y=player_df['performance_after'],
+                              mode='lines+markers', name='Performance After Injury'))
+fig_line.update_layout(title=f"{player_name} Performance Timeline",
+                       xaxis_title="Match Date", yaxis_title="Performance Rating")
+st.plotly_chart(fig_line, use_container_width=True)
 
 # ------------------------------
 # Visualization 3: Injury Frequency Heatmap
 # ------------------------------
 st.subheader("Injury Frequency Across Months & Clubs")
-df_filtered['month'] = df_filtered['match_date'].dt.month
 injury_freq = df_filtered.groupby(['club', 'month']).size().reset_index(name='injury_count')
 fig_heatmap = px.density_heatmap(
     injury_freq,
@@ -122,8 +144,6 @@ st.plotly_chart(fig_scatter, use_container_width=True)
 # Visualization 5: Leaderboard of Comeback Players
 # ------------------------------
 st.subheader("Leaderboard: Comeback Players")
-# Define comeback as improvement in performance after injury
-df_filtered['rating_improvement'] = df_filtered['performance_after'] - df_filtered['performance_before']
 comeback_leaderboard = df_filtered.groupby('player_name')['rating_improvement'].mean().sort_values(ascending=False).head(10).reset_index()
 st.dataframe(comeback_leaderboard.style.background_gradient(subset=['rating_improvement'], cmap='Greens'))
 
