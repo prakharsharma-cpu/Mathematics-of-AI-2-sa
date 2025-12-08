@@ -67,26 +67,8 @@ def load_sample_data(n_matches=400):
 def preprocess_matches(df_raw):
     df = df_raw.copy()
 
-    # Ensure 'match_date' exists, fallback if missing
-    if 'match_date' not in df.columns:
-        st.warning("Column 'match_date' not found. Creating synthetic dates.")
-        df['match_date'] = pd.date_range(start='2021-08-01', periods=len(df), freq='2D')
-
-    # Convert to datetime safely
+    # Ensure 'match_date' exists and convert
     df['match_date'] = pd.to_datetime(df['match_date'], errors='coerce')
-
-    # Ensure required columns exist; fill missing with 0
-    default_cols = {
-        'home_team': 'Team A', 'away_team': 'Team B',
-        'home_goals':0, 'away_goals':0,
-        'home_points':0, 'away_points':0,
-        'home_injuries':0, 'away_injuries':0,
-        'home_minutes_lost':0, 'away_minutes_lost':0
-    }
-    for col, default in default_cols.items():
-        if col not in df.columns:
-            st.warning(f"Column '{col}' missing. Filling with default.")
-            df[col] = default
 
     # Melt to team-level rows
     home = df.rename(columns={
@@ -121,19 +103,7 @@ def preprocess_matches(df_raw):
 
     return team_level
 
-# --- Load Data --------------------------------------------------------
+# --- Load sample data only -------------------------------------------
 st.title("⚽ FootLens — Injuries vs Team Performance Dashboard")
-
-uploaded = st.file_uploader("Upload match-level CSV (optional)", type=['csv'])
-sample_button = st.button("Load Sample Dataset")
-
-if uploaded is not None:
-    try:
-        df_raw = pd.read_csv(uploaded)
-    except Exception as e:
-        st.error(f"Error reading CSV: {e}")
-        df_raw = load_sample_data(400)
-elif sample_button or uploaded is None:
-    df_raw = load_sample_data(400)
-
+df_raw = load_sample_data(400)
 team_level = preprocess_matches(df_raw)
