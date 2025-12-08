@@ -3,19 +3,26 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import os
 
-# --- Load Dataset ---
 st.title("FootLens Analytics: Player Injuries & Team Performance Dashboard")
 st.markdown("""
 This interactive dashboard helps visualize the impact of player injuries on team performance and match outcomes.
 """)
 
+# --- Load Dataset with Error Handling ---
 @st.cache_data
-def load_data():
-    df = pd.read_csv("football_injuries.csv")  # Replace with your dataset path
+def load_data(file_path):
+    if not os.path.exists(file_path):
+        st.error(f"Dataset file not found: {file_path}")
+        st.stop()  # Stop execution if file not found
+    df = pd.read_csv(file_path)
     return df
 
-df = load_data()
+# Path to your CSV dataset
+dataset_path = "football_injuries.csv"  # Make sure the file is in the same folder
+
+df = load_data(dataset_path)
 
 # --- Sidebar Filters ---
 st.sidebar.header("Filters")
@@ -72,7 +79,7 @@ fig2.add_trace(go.Bar(x=outcome_df["team"], y=outcome_df["losses"], name="Losses
 fig2.update_layout(barmode='stack', title="Team Match Outcomes")
 st.plotly_chart(fig2)
 
-# --- Injuries Heatmap (Optional) ---
+# --- Injuries Heatmap / Treemap ---
 st.subheader("Injury Occurrences by Player")
 player_injuries = df_filtered.groupby(["team", "player_name"])["injuries"].sum().reset_index()
 fig3 = px.treemap(
