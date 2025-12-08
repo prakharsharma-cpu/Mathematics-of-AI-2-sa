@@ -1,102 +1,127 @@
-# FootLens Analytics - Streamlit Dashboard (Debugged & Optimized)
-# Filename: footlens_streamlit_dashboard.py
-# Purpose: Interactive dashboard to explore relationship between player injuries and team performance
-# Author: FootLens AI Research & Insights (Junior Sports Data Analyst template)
+# footlens_full_dashboard.py
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 from datetime import datetime
+import requests
 
-st.set_page_config(layout="wide", page_title="FootLens — Injuries vs Performance", page_icon="⚽")
+st.set_page_config(page_title="FootLens AI Manager Dashboard", layout="wide")
+st.title("FootLens AI Full Manager Dashboard")
+st.markdown("""
+Comprehensive dashboard for injury analytics, fatigue tracking, training load, lineup optimization, and real-time alerts.
+""")
 
-# --- Helper functions -------------------------------------------------
-@st.cache_data
-def load_sample_data(n_matches=400):
-    rng = np.random.default_rng(42)
-    seasons = ["2021/22", "2022/23", "2023/24", "2024/25"]
-    teams = [f"Team {c}" for c in list("ABCDEFGHIJ")[:10]]
+# --- Sidebar: Upload / Live Data ---
+st.sidebar.header("Upload / Live Data Settings")
+uploaded_file = st.sidebar.file_uploader("Upload CSV (internal dataset)", type=["csv"])
+api_key = st.sidebar.text_input("Football API Key (optional for live data)", type="password")
+competition_code = st.sidebar.text_input("Competition Code (optional, e.g., PL, CL)")
 
-    rows = []
-    start_date = datetime(2021, 8, 1)
-    for i in range(n_matches):
-        date = start_date + pd.Timedelta(days=int(i * 2))
-        season = seasons[(i // 100) % len(seasons)]
-        home = rng.choice(teams)
-        away = rng.choice([t for t in teams if t != home])
-        home_goals = rng.poisson(1.4)
-        away_goals = rng.poisson(1.1)
-        if home_goals > away_goals:
-            points_home, points_away = 3, 0
-        elif home_goals < away_goals:
-            points_home, points_away = 0, 3
-        else:
-            points_home = points_away = 1
+# --- Load internal dataset ---
+if uploaded_file:
+    df_internal = pd.read_csv(uploaded_file)
+    df_internal.fillna(0, inplace=True)
+else:
+    st.warning("Please upload an internal dataset CSV to proceed")
+    st.stop()
 
-        injuries_home = rng.poisson(0.6)
-        injuries_away = rng.poisson(0.5)
-        minutes_lost_home = int(injuries_home * rng.integers(15, 90))
-        minutes_lost_away = int(injuries_away * rng.integers(15, 90))
+# --- Filters ---
+st.sidebar.header("Filters")
+seasons = st.sidebar.multiselect("Select Season(s)", options=df_internal['Season'].unique(), default=df_internal['Season'].unique())
+teams = st.sidebar.multiselect("Select Team(s)", options=df_internal['Team'].unique(), default=df_internal['Team'].unique())
+df_filtered = df_internal[(df_internal['Season'].isin(seasons)) & (df_internal['Team'].isin(teams))]
 
-        rows.append({
-            "match_id": i,
-            "match_date": date,
-            "season": season,
-            "home_team": home,
-            "away_team": away,
-            "home_goals": home_goals,
-            "away_goals": away_goals,
-            "home_points": points_home,
-            "away_points": points_away,
-            "home_injuries": injuries_home,
-            "away_injuries": injuries_away,
-            "home_minutes_lost": minutes_lost_home,
-            "away_minutes_lost": minutes_lost_away
-        })
+st.subheader("Dataset Overview")
+st.dataframe(df_filtered.head())
 
-    df = pd.DataFrame(rows)
-    return df
+# --- Key Metrics ---
+st.subheader("Team Metrics")
+total_injuries = df_filtered['Injury_Count'].sum()
+avg_points = df_filtered['Points'].mean()
+avg_injuries = df_filtered.groupby('Team')['Injury_Count'].mean().mean()
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Injuries", total_injuries)
+col2.metric("Average Team Points", round(avg_points,2))
+col3.metric("Average Injuries per Team", round(avg_injuries,2))
 
-@st.cache_data
-def preprocess_matches(df_raw):
-    df = df_raw.copy()
-    df['match_date'] = pd.to_datetime(df['match_date'], errors='coerce')
+# --- Injury Distribution ---
+st.subheader("Injury Distribution by Team")
+injury_team = df_filtered.groupby('Team')['Injury_Count'].sum().reset_index()
+fig1 = px.bar(injury_team, x='Team', y='Injury_Count', color='Injury_Count', color_continuous_scale='Reds')
+st.plotly_chart(fig1, use_container_width=True)
 
-    # Melt to team-level rows
-    home = df.rename(columns={
-        "home_team": "team",
-        "away_team": "opponent",
-        "home_goals": "goals_for",
-        "away_goals": "goals_against",
-        "home_points": "points",
-        "home_injuries": "injuries",
-        "home_minutes_lost": "minutes_lost"
-    })
-    home['venue'] = 'Home'
+# --- Player-Level Trends ---
+st.subheader("Player-Level Injury Trends")
+player = st.selectbox("Select Player", options=df_filtered['Player'].unique())
+player_df = df_filtered[df_filtered['Player']==player]
+fig2 = px.line(player_df, x='Season', y='Injury_Count', markers=True, title=f"Injury Trend for {player}")
+st.plotly_chart(fig2, use_container_width=True)
 
-    away = df.rename(columns={
-        "away_team": "team",
-        "home_team": "opponent",
-        "away_goals": "goals_for",
-        "home_goals": "goals_against",
-        "away_points": "points",
-        "away_injuries": "injuries",
-        "away_minutes_lost": "minutes_lost"
-    })
-    away['venue'] = 'Away'
+# --- Injury Prediction ---
+st.subheader("Injury Risk Prediction")
+features = ['Minutes_Played','Goals_Scored','Assists','Injury_Count_Last_Season','Matches_Played']
+if all(f in df_filtered.columns for f in features):
+    X = df_filtered[features]
+    y = df_filtered['Injury_Count']
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    df_filtered['Predicted_Injuries'] = model.predict(X)
+    st.write(df_filtered[['Player','Team','Predicted_Injuries']].sort_values(by='Predicted_Injuries', ascending=False).head(10))
+else:
+    st.warning("Missing required columns for injury prediction.")
 
-    team_level = pd.concat([home, away], ignore_index=True, sort=False)
-    team_level['goal_diff'] = team_level['goals_for'] - team_level['goals_against']
+# --- Fatigue & Training Load ---
+st.subheader("Fatigue & Training Load")
+df_filtered['Fatigue'] = df_filtered['Minutes_Played']/90
+df_filtered['Recommended_Training_Load'] = np.where(df_filtered['Predicted_Injuries']>1.5, 0.7, 1.0)
+st.dataframe(df_filtered[['Player','Team','Predicted_Injuries','Fatigue','Recommended_Training_Load']])
 
-    # Rolling metrics
-    team_level = team_level.sort_values(['team', 'match_date'])
-    team_level['injuries_rolling3'] = team_level.groupby('team')['injuries'].rolling(3, min_periods=1).mean().reset_index(0, drop=True)
-    team_level['minutes_lost_rolling3'] = team_level.groupby('team')['minutes_lost'].rolling(3, min_periods=1).mean().reset_index(0, drop=True)
+# --- Dynamic Lineup Optimizer ---
+st.subheader("Optimal Lineup")
+selected_team = st.selectbox("Select Team to Optimize", options=teams)
+team_df = df_filtered[df_filtered['Team']==selected_team].sort_values(by=['Predicted_Injuries','Fatigue'])
+lineup = team_df.head(11)[['Player','Predicted_Injuries','Fatigue','Minutes_Played']]
+st.dataframe(lineup)
 
-    return team_level
+# --- Scenario Simulation ---
+st.subheader("Scenario Simulation")
+rest_players = st.multiselect("Select players to rest", options=team_df['Player'])
+if st.button("Simulate Team Performance with Rested Players"):
+    temp_df = team_df.copy()
+    temp_df['Simulated_Points'] = temp_df['Points']
+    temp_df.loc[temp_df['Player'].isin(rest_players), 'Simulated_Points'] *= 0.9
+    st.bar_chart(temp_df.groupby('Player')['Simulated_Points'].sum())
 
-# --- Load and process data -------------------------------------------
-st.title("⚽ FootLens — Injuries vs Team Performance Dashboard")
-df_raw = load_sample_data(400)
-team_level = preprocess_matches(df
+# --- Live Data Integration (optional) ---
+if api_key and competition_code:
+    st.subheader("Live Data Integration (Optional)")
+    headers = {"X-Auth-Token": api_key}
+    try:
+        url = f"https://api.football-data.org/v4/matches?competitions={competition_code}"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        live_matches = response.json().get("matches", [])
+        st.write(f"Live matches fetched: {len(live_matches)}")
+        st.json(live_matches[:5])  # show top 5 for preview
+    except Exception as e:
+        st.error(f"Failed to fetch live data: {e}")
+
+# --- Alerts ---
+st.subheader("High-Risk Player Alerts")
+alerts = df_filtered[(df_filtered['Predicted_Injuries']>1.5) | (df_filtered['Fatigue']>0.9)]
+st.dataframe(alerts[['Player','Team','Predicted_Injuries','Fatigue']])
+
+# --- Visualizations ---
+st.subheader("Fatigue vs Predicted Injury Risk")
+fig3 = px.scatter(df_filtered, x='Fatigue', y='Predicted_Injuries', color='Team', hover_data=['Player'])
+st.plotly_chart(fig3, use_container_width=True)
+
+st.subheader("Correlation Matrix")
+if all(c in df_filtered.columns for c in ['Injury_Count','Points','Goals_Scored','Goals_Conceded']):
+    corr = df_filtered[['Injury_Count','Points','Goals_Scored','Goals_Conceded']].corr()
+    fig4 = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r', title="Correlation Matrix")
+    st.plotly_chart(fig4, use_container_width=True)
