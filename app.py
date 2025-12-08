@@ -1,210 +1,311 @@
-# app.py
+# FootLens Analytics - Streamlit Dashboard
+# Filename: footlens_streamlit_dashboard.py
+# Purpose: Interactive dashboard to explore relationship between player injuries and team performance
+# Author: FootLens AI Research & Insights (Junior Sports Data Analyst template)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime
 
-# ------------------------------
-# App Title and Description
-# ------------------------------
-st.set_page_config(page_title="FootLens Player Injury Dashboard", layout="wide")
-st.title("FootLens Analytics: Player Injury & Performance Dashboard")
-st.markdown("""
-**Purpose:** Visualize the impact of injuries on team and player performance.  
-**Audience:** Technical directors, coaches, and sports managers.  
-""")
+st.set_page_config(layout="wide", page_title="FootLens — Injuries vs Performance", page_icon="⚽")
 
-# ------------------------------
-# Upload CSV Dataset
-# ------------------------------
-st.sidebar.header("Upload CSV (if required)")
-uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv")
+# --- Additional upload for injury-level data --------------------------------
+# Optional second CSV: player injuries (columns suggested: player, team, match_date, injury_type, days_out)
+# Merged later for deeper insights
 
-# ------------------------------
-# Load & Preprocess Data (SAFE FIX)
-# ------------------------------
+injury_player_df = None
+if 'uploaded_player' not in st.session_state:
+    st.session_state.uploaded_player = None
+
+with st.sidebar:
+    st.header("Player Injury Data (Optional)")
+    uploaded_player = st.file_uploader("Upload player-level injury CSV", type=["csv"], key="player_csv")
+    if uploaded_player is not None:
+        try:
+            injury_player_df = pd.read_csv(uploaded_player)
+        except Exception as e:
+            st.error(f"Error loading player-level CSV: {e}")
+
+# --- Helper functions -------------------------------------------------
 @st.cache_data
-def load_data(uploaded_file=None):
-    # Try local file first
-    try:
-        df = pd.read_csv("player_injuries_fixed.csv")
-        st.success("Loaded local dataset: player_injuries_fixed.csv")
-    except FileNotFoundError:
-        # Fall back to uploaded file
-        if uploaded_file is None:
-            st.error("""
-            ⚠️ No dataset found.
+def load_sample_data(n_matches=400):
+    # Create synthetic dataset with realistic-ish structure
+    rng = np.random.default_rng(42)
+    seasons = ["2021/22", "2022/23", "2023/24", "2024/25"]
+    teams = [f"Team {c}" for c in list("ABCDEFGHIJ")[:10]]
+    positions = ["GK", "DEF", "MID", "FWD"]
 
-            The file **player_injuries_fixed.csv** is missing on the server.
-            Please upload your CSV file using the left sidebar.
-            """)
-            st.stop()
+    rows = []
+    start_date = datetime(2021, 8, 1)
+    for i in range(n_matches):
+        date = start_date + pd.Timedelta(days=int(i * 2))
+        season = seasons[(i // 100) % len(seasons)]
+        home = rng.choice(teams)
+        away = rng.choice([t for t in teams if t != home])
+        home_goals = rng.poisson(1.4)
+        away_goals = rng.poisson(1.1)
+        if home_goals > away_goals:
+            result = "Home Win"
+            points_home, points_away = 3, 0
+        elif home_goals < away_goals:
+            result = "Away Win"
+            points_home, points_away = 0, 3
         else:
-            df = pd.read_csv(uploaded_file)
-            st.success("Loaded uploaded dataset.")
+            result = "Draw"
+            points_home = points_away = 1
 
-    # Parse date column
-    if 'match_date' in df.columns:
-        df['match_date'] = pd.to_datetime(df['match_date'], errors='coerce', dayfirst=True)
-    else:
-        df['match_date'] = pd.NaT
+        # Injuries simulated
+        injuries_home = rng.poisson(0.6)
+        injuries_away = rng.poisson(0.5)
+        minutes_lost_home = int(injuries_home * rng.integers(15, 90))
+        minutes_lost_away = int(injuries_away * rng.integers(15, 90))
 
-    # Numeric columns
-    for col in ['performance_before', 'performance_after', 'age']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        else:
-            df[col] = np.nan
+        rows.append({
+            "match_id": i,
+            "match_date": date,
+            "season": season,
+            "home_team": home,
+            "away_team": away,
+            "home_goals": home_goals,
+            "away_goals": away_goals,
+            "result": result,
+            "home_points": points_home,
+            "away_points": points_away,
+            "home_injuries": injuries_home,
+            "away_injuries": injuries_away,
+            "home_minutes_lost": minutes_lost_home,
+            "away_minutes_lost": minutes_lost_away
+        })
 
-    # Calculated metrics
-    df['performance_drop'] = df.get('performance_before', 0) - df.get('performance_after', 0)
-    df['rating_improvement'] = df.get('performance_after', 0) - df.get('performance_before', 0)
-
-    # Month for heatmap
-    if 'match_date' in df.columns:
-        df['month'] = df['match_date'].dt.month
-    else:
-        df['month'] = np.nan
-
+    df = pd.DataFrame(rows)
     return df
 
-df = load_data(uploaded_file)
+@st.cache_data
+def preprocess_matches(df_raw):
+    df = df_raw.copy()
+    # Ensure datetime
+    if not np.issubdtype(df["match_date"].dtype, np.datetime64):
+        df["match_date"] = pd.to_datetime(df["match_date"], errors="coerce")
 
-# ------------------------------
-# Sidebar Filters
-# ------------------------------
-st.sidebar.header("Filters")
+    # Normalize column names
+    df.columns = [c.strip() for c in df.columns]
 
-clubs = df['club'].dropna().unique().tolist() if 'club' in df.columns else []
-players = df['player_name'].dropna().unique().tolist() if 'player_name' in df.columns else []
-seasons = df['season'].dropna().unique().tolist() if 'season' in df.columns else []
+    # Melt to team-level rows (one row per team per match)
+    home = df.rename(columns={
+        "home_team": "team",
+        "away_team": "opponent",
+        "home_goals": "goals_for",
+        "away_goals": "goals_against",
+        "home_points": "points",
+        "home_injuries": "injuries",
+        "home_minutes_lost": "minutes_lost"
+    })
+    home["venue"] = "Home"
 
-selected_club = st.sidebar.multiselect("Select Club(s)", clubs, default=clubs)
-selected_player = st.sidebar.multiselect("Select Player(s)", players, default=players)
-selected_season = st.sidebar.multiselect("Select Season(s)", seasons, default=seasons)
+    away = df.rename(columns={
+        "away_team": "team",
+        "home_team": "opponent",
+        "away_goals": "goals_for",
+        "home_goals": "goals_against",
+        "away_points": "points",
+        "away_injuries": "injuries",
+        "away_minutes_lost": "minutes_lost"
+    })
+    away["venue"] = "Away"
 
-df_filtered = df.copy()
+    cols = [c for c in home.columns if c in home.columns]
+    team_level = pd.concat([home, away], ignore_index=True, sort=False)
 
-if 'club' in df.columns and selected_club:
-    df_filtered = df_filtered[df_filtered['club'].isin(selected_club)]
-if 'player_name' in df.columns and selected_player:
-    df_filtered = df_filtered[df_filtered['player_name'].isin(selected_player)]
-if 'season' in df.columns and selected_season:
-    df_filtered = df_filtered[df_filtered['season'].isin(selected_season)]
+    # Basic derived metrics
+    team_level["goal_diff"] = team_level["goals_for"] - team_level["goals_against"]
+    # Rolling injury burden per team
+    team_level = team_level.sort_values(["team", "match_date"]) 
+    team_level["injuries_rolling3"] = team_level.groupby("team")["injuries"].rolling(3, min_periods=1).mean().reset_index(0, drop=True)
+    team_level["minutes_lost_rolling3"] = team_level.groupby("team")["minutes_lost"].rolling(3, min_periods=1).mean().reset_index(0, drop=True)
 
-if df_filtered.empty:
-    st.info("No data available for the selected filters.")
-    st.stop()
+    return team_level
 
-# ------------------------------
-# Visualization 1: Injury Performance Drop
-# ------------------------------
-st.subheader("Top 10 Injuries Causing Highest Team Performance Drop")
+# --- UI layout --------------------------------------------------------
+st.title("⚽ FootLens — Injuries vs Team Performance Dashboard")
+st.markdown(
+    "Use this interactive dashboard to explore how player injuries (counts and minutes lost) correlate with match outcomes and team standings.\n\n"
+    "Upload your dataset (CSV) or use the synthetic sample dataset to experiment. Expected columns for best results: `match_date`, `season`, `home_team`, `away_team`, `home_goals`, `away_goals`, `home_points`, `away_points`, `home_injuries`, `away_injuries`, `home_minutes_lost`, `away_minutes_lost`."
+)
 
-if 'injury_type' in df.columns and 'performance_drop' in df.columns:
-    df_bar = df_filtered.dropna(subset=['injury_type', 'performance_drop'])
-    if not df_bar.empty:
-        injury_impact = df_bar.groupby('injury_type')['performance_drop'] \
-                              .mean().sort_values(ascending=False).head(10).reset_index()
+with st.sidebar:
+    st.header("Data")
+    uploaded = st.file_uploader("Upload CSV file (match-level) — leave empty to use sample", type=["csv"])    
+    sample_button = st.button("Load sample dataset")
+    st.markdown("---")
+    st.header("Filters")
+    season_filter = st.multiselect("Seasons", options=[], default=None)
+    team_filter = st.multiselect("Teams", options=[], default=None)
+    venue_filter = st.selectbox("Venue", options=["All", "Home", "Away"], index=0)
+    date_range = st.date_input("Date range", [])
+    st.markdown("---")
+    st.header("Export")
+    st.write("Download filtered CSV or summary after applying filters.")
 
-        fig_bar = px.bar(
-            injury_impact,
-            x='performance_drop',
-            y='injury_type',
-            orientation='h',
-            color='performance_drop',
-            color_continuous_scale='Reds',
-            title="Top 10 Injuries Impacting Team Performance"
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
-    else:
-        st.info("No valid data to display this chart.")
+# Load data
+if uploaded is not None:
+    try:
+        df_raw = pd.read_csv(uploaded)
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        st.stop()
+elif sample_button or uploaded is None:
+    df_raw = load_sample_data(420)
 
-# ------------------------------
-# Visualization 2: Player Performance Timeline
-# ------------------------------
-st.subheader("Player Performance Timeline (Before & After Injury)")
+team_level = preprocess_matches(df_raw)
 
-if 'player_name' in df.columns:
-    player_name = st.selectbox("Select Player", df_filtered['player_name'].unique())
-    player_df = df_filtered[df_filtered['player_name'] == player_name].sort_values('match_date')
+# Update sidebar filter options now that data is loaded
+with st.sidebar:
+    seasons = sorted(team_level["season"].dropna().unique().tolist())
+    teams = sorted(team_level["team"].dropna().unique().tolist())
+    season_filter = st.multiselect("Seasons", options=seasons, default=seasons)
+    team_filter = st.multiselect("Teams", options=teams, default=teams[:5])
 
-    fig_line = go.Figure()
-    if 'performance_before' in df.columns:
-        fig_line.add_trace(go.Scatter(
-            x=player_df['match_date'],
-            y=player_df['performance_before'],
-            mode='lines+markers',
-            name="Performance Before Injury"
-        ))
+# Apply filters
+df = team_level.copy()
+if season_filter:
+    df = df[df["season"].isin(season_filter)]
+if team_filter:
+    df = df[df["team"].isin(team_filter)]
+if venue_filter != "All":
+    df = df[df["venue"] == venue_filter]
+if len(date_range) == 2:
+    start, end = date_range
+    df = df[(df["match_date"] >= pd.to_datetime(start)) & (df["match_date"] <= pd.to_datetime(end))]
 
-    if 'performance_after' in df.columns:
-        fig_line.add_trace(go.Scatter(
-            x=player_df['match_date'],
-            y=player_df['performance_after'],
-            mode='lines+markers',
-            name="Performance After Injury"
-        ))
+st.sidebar.download_button("Download filtered CSV", df.to_csv(index=False).encode("utf-8"), file_name="footlens_filtered.csv")
 
-    st.plotly_chart(fig_line, use_container_width=True)
+# --- Top-level KPIs --------------------------------------------------
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("Matches (team-rows)", int(len(df)))
+with col2:
+    st.metric("Avg injuries per match", round(df["injuries"].mean(), 2))
+with col3:
+    st.metric("Avg minutes lost per match", int(df["minutes_lost"].mean()))
+with col4:
+    st.metric("Avg points per match", round(df["points"].mean(), 2))
 
-# ------------------------------
-# Visualization 3: Injury Frequency Heatmap
-# ------------------------------
-st.subheader("Injury Frequency Across Months & Clubs")
-
-if 'club' in df.columns and 'month' in df.columns:
-    df_heat = df_filtered.dropna(subset=['club', 'month'])
-    if not df_heat.empty:
-        heat = df_heat.groupby(['club', 'month']).size().reset_index(name='injury_count')
-
-        fig_heat = px.density_heatmap(
-            heat,
-            x='month',
-            y='club',
-            z='injury_count',
-            color_continuous_scale='Viridis',
-            title="Monthly Injury Frequency by Club"
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
-
-# ------------------------------
-# Visualization 4: Age vs Performance Drop
-# ------------------------------
-st.subheader("Player Age vs Performance Drop")
-
-if 'age' in df.columns:
-    df_scatter = df_filtered.dropna(subset=['age', 'performance_drop'])
-    if not df_scatter.empty:
-        hover_cols = [c for c in ['player_name','injury_type','season'] if c in df_scatter.columns]
-
-        fig_scatter = px.scatter(
-            df_scatter,
-            x="age",
-            y="performance_drop",
-            color="club" if 'club' in df_scatter.columns else None,
-            size="performance_drop",
-            hover_data=hover_cols,
-            title="Player Age vs Performance Drop"
-        )
-        st.plotly_chart(fig_scatter, use_container_width=True)
-
-# ------------------------------
-# Visualization 5: Comeback Leaderboard
-# ------------------------------
-st.subheader("Leaderboard: Comeback Players")
-
-if 'rating_improvement' in df.columns:
-    come = df_filtered.groupby('player_name')['rating_improvement'] \
-                      .mean().sort_values(ascending=False).head(10).reset_index()
-
-    st.dataframe(
-        come.style.background_gradient(subset=['rating_improvement'], cmap='Greens')
-    )
-
-# ------------------------------
-# Footer
-# ------------------------------
 st.markdown("---")
-st.markdown("💡 **Insight:** Use this dashboard to track injury impacts, guide rotation strategies, and monitor player recovery trends.")
+
+# --- Time series: injuries vs points --------------------------------
+st.subheader("Time series: Injuries and Points — selected teams")
+team_for_ts = st.multiselect("Select teams to compare (time series)", options=teams, default=team_filter[:3])
+
+if team_for_ts:
+    df_ts = df[df["team"].isin(team_for_ts)].sort_values(["team", "match_date"]) 
+    fig = go.Figure()
+    # injuries (rolling)
+    for t in team_for_ts:
+        d = df_ts[df_ts["team"] == t]
+        fig.add_trace(go.Scatter(x=d["match_date"], y=d["injuries_rolling3"], name=f"{t} — injuries (roll3)", mode="lines+markers", yaxis="y1"))
+        fig.add_trace(go.Scatter(x=d["match_date"], y=d["points"].rolling(3, min_periods=1).mean(), name=f"{t} — points (roll3)", mode="lines", yaxis="y2"))
+
+    # layout with two y axes
+    fig.update_layout(
+        xaxis_title="Match date",
+        yaxis=dict(title="Injuries (rolling 3)", side="left"),
+        yaxis2=dict(title="Points (rolling 3)", overlaying="y", side="right", showgrid=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Select at least one team for time series view.")
+
+st.markdown("---")
+
+# --- Scatter: injuries vs points ------------------------------------
+st.subheader("Team-level relationship: Injuries vs Points")
+agg = df.groupby(["team", "season"]).agg(
+    matches=("match_id", "nunique"),
+    avg_injuries=("injuries", "mean"),
+    avg_minutes_lost=("minutes_lost", "mean"),
+    avg_points=("points", "mean")
+).reset_index()
+
+fig2 = px.scatter(
+    agg, x="avg_injuries", y="avg_points", size="matches", color="season",
+    hover_data=["team", "avg_minutes_lost", "matches"],
+    labels={"avg_injuries": "Average injuries per match", "avg_points": "Average points per match"},
+    title="Average injuries per match vs average points — circle size = matches played"
+)
+st.plotly_chart(fig2, use_container_width=True)
+
+# Compute correlation
+corr_text = "Correlation (Pearson) between avg_injuries and avg_points:"
+if len(agg) >= 2:
+    corr = agg[["avg_injuries", "avg_points"]].corr().iloc[0,1]
+    st.write(corr_text, round(corr, 3))
+else:
+    st.write(corr_text, "Not enough data")
+
+st.markdown("---")
+
+# --- Injury heatmap by venue / season / team -------------------------
+st.subheader("Injury burden heatmap")
+heat = df.groupby(["team", "season"]).agg(total_injuries=("injuries", "sum"), total_minutes=("minutes_lost", "sum"))
+heat = heat.reset_index()
+
+heat_pivot = heat.pivot(index="team", columns="season", values="total_injuries").fillna(0)
+
+fig3 = px.imshow(heat_pivot, labels=dict(x="Season", y="Team", color="Total injuries"), aspect="auto", title="Total injuries by team and season")
+st.plotly_chart(fig3, use_container_width=True)
+
+st.markdown("---")
+
+# --- Standings simulator (points table) ------------------------------
+st.subheader("Simple standings: Points aggregation")
+standings = df.groupby(["team", "season"]).agg(matches=("match_id","nunique"), points=("points", "sum"), goals_for=("goals_for","sum"), goals_against=("goals_against","sum")).reset_index()
+standings["goal_diff"] = standings["goals_for"] - standings["goals_against"]
+standings_sorted = standings.sort_values(["season", "points", "goal_diff"], ascending=[True, False, False])
+
+season_choice = st.selectbox("Choose season to view standings", options=seasons, index=0)
+st.dataframe(standings_sorted[standings_sorted["season"] == season_choice].reset_index(drop=True))
+
+st.markdown("---")
+
+# --- Squad risk table (minutes lost -> risk band) --------------------
+st.subheader("Squad-level risk assessment (team-season)")
+risk = heat.copy()
+# Define simple risk bands
+risk["risk_band"] = pd.cut(risk["total_minutes"], bins=[-1, 200, 500, 1000, 100000], labels=["Low", "Moderate", "High", "Critical"]) 
+st.dataframe(risk.sort_values(["season", "total_minutes"], ascending=[True, False]).reset_index(drop=True))
+
+st.markdown("---")
+
+# --- Simple actionable insights generator ---------------------------
+st.subheader("Actionable insights (auto-generated suggestions)")
+insights = []
+
+# Insight rules (simple heuristics)
+for _, row in risk.iterrows():
+    if row["total_minutes"] > 1000:
+        insights.append(f"{row['team']} ({row['season']}): Critical minutes lost — review medical protocols, reduce training intensity, and prioritize recovery for key players.")
+    elif row["total_minutes"] > 500:
+        insights.append(f"{row['team']} ({row['season']}): High injury burden — consider increasing squad rotation and targeted conditioning for positions with repeated injuries.")
+    elif row["total_minutes"] > 200:
+        insights.append(f"{row['team']} ({row['season']}): Moderate injury load — monitor training loads and use sport science to individualize recovery.")
+    else:
+        insights.append(f"{row['team']} ({row['season']}): Low injury minutes — current load management appears effective; maintain preventive measures.")
+
+# Deduplicate and show top suggestions
+insights = list(dict.fromkeys(insights))
+for s in insights[:12]:
+    st.write("• ", s)
+
+st.markdown("---")
+
+# --- Appendix: show raw team-level data --------------------------------
+with st.expander("Show filtered team-level data"):
+    st.dataframe(df.reset_index(drop=True))
+
+st.caption("FootLens — Dashboard prototype. Adapt column names and logic to match your production dataset schema.")
+
+# End of file
