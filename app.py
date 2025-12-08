@@ -29,13 +29,10 @@ def load_sample_data(n_matches=400):
         home_goals = rng.poisson(1.4)
         away_goals = rng.poisson(1.1)
         if home_goals > away_goals:
-            result = "Home Win"
             points_home, points_away = 3, 0
         elif home_goals < away_goals:
-            result = "Away Win"
             points_home, points_away = 0, 3
         else:
-            result = "Draw"
             points_home = points_away = 1
 
         injuries_home = rng.poisson(0.6)
@@ -51,7 +48,6 @@ def load_sample_data(n_matches=400):
             "away_team": away,
             "home_goals": home_goals,
             "away_goals": away_goals,
-            "result": result,
             "home_points": points_home,
             "away_points": points_away,
             "home_injuries": injuries_home,
@@ -67,7 +63,23 @@ def load_sample_data(n_matches=400):
 def preprocess_matches(df_raw):
     df = df_raw.copy()
 
-    # Ensure 'match_date' exists and convert
+    # Ensure all required columns exist
+    required_cols = ["match_id","match_date","season","home_team","away_team",
+                     "home_goals","away_goals","home_points","away_points",
+                     "home_injuries","away_injuries","home_minutes_lost","away_minutes_lost"]
+    for col in required_cols:
+        if col not in df.columns:
+            # Fill missing with safe defaults
+            if 'goals' in col or 'points' in col or 'injuries' in col or 'minutes' in col:
+                df[col] = 0
+            elif 'team' in col:
+                df[col] = 'Team A'
+            elif col == 'match_date':
+                df[col] = pd.date_range(start='2021-08-01', periods=len(df), freq='2D')
+            elif col == 'season':
+                df[col] = '2021/22'
+
+    # Convert match_date to datetime
     df['match_date'] = pd.to_datetime(df['match_date'], errors='coerce')
 
     # Melt to team-level rows
