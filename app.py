@@ -86,20 +86,24 @@ if df_filtered.empty:
 # Visualization 1: Top 10 Injuries by Performance Drop
 # ------------------------------
 st.subheader("Top 10 Injuries Causing Highest Team Performance Drop")
-if 'injury_type' in df_filtered.columns:
-    injury_impact = df_filtered.groupby('injury_type')['performance_drop'].mean().sort_values(ascending=False).head(10).reset_index()
-    fig_bar = px.bar(
-        injury_impact,
-        x='performance_drop',
-        y='injury_type',
-        orientation='h',
-        color='performance_drop',
-        color_continuous_scale='Reds',
-        title="Top 10 Injuries Impacting Team Performance"
-    )
-    st.plotly_chart(fig_bar, use_container_width=True)
+if 'injury_type' in df_filtered.columns and 'performance_drop' in df_filtered.columns:
+    df_bar = df_filtered.dropna(subset=['injury_type', 'performance_drop'])
+    if not df_bar.empty:
+        injury_impact = df_bar.groupby('injury_type')['performance_drop'].mean().sort_values(ascending=False).head(10).reset_index()
+        fig_bar = px.bar(
+            injury_impact,
+            x='performance_drop',
+            y='injury_type',
+            orientation='h',
+            color='performance_drop',
+            color_continuous_scale='Reds',
+            title="Top 10 Injuries Impacting Team Performance"
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+    else:
+        st.info("No valid data for Top Injuries chart.")
 else:
-    st.info("Column 'injury_type' missing. Cannot display Top Injuries chart.")
+    st.info("Columns 'injury_type' or 'performance_drop' missing.")
 
 # ------------------------------
 # Visualization 2: Player Performance Timeline
@@ -111,14 +115,21 @@ if 'player_name' in df_filtered.columns and ('performance_before' in df_filtered
     
     fig_line = go.Figure()
     if 'performance_before' in player_df.columns:
-        fig_line.add_trace(go.Scatter(x=player_df['match_date'], y=player_df['performance_before'],
-                                      mode='lines+markers', name='Performance Before Injury'))
+        fig_line.add_trace(go.Scatter(
+            x=player_df['match_date'], y=player_df['performance_before'],
+            mode='lines+markers', name='Performance Before Injury'
+        ))
     if 'performance_after' in player_df.columns:
-        fig_line.add_trace(go.Scatter(x=player_df['match_date'], y=player_df['performance_after'],
-                                      mode='lines+markers', name='Performance After Injury'))
-    fig_line.update_layout(title=f"{player_name} Performance Timeline",
-                           xaxis_title="Match Date", yaxis_title="Performance Rating")
-    st.plotly_chart(fig_line, use_container_width=True)
+        fig_line.add_trace(go.Scatter(
+            x=player_df['match_date'], y=player_df['performance_after'],
+            mode='lines+markers', name='Performance After Injury'
+        ))
+    if fig_line.data:
+        fig_line.update_layout(title=f"{player_name} Performance Timeline",
+                               xaxis_title="Match Date", yaxis_title="Performance Rating")
+        st.plotly_chart(fig_line, use_container_width=True)
+    else:
+        st.info("No performance data available for this player.")
 else:
     st.info("Insufficient data to plot Player Performance Timeline.")
 
@@ -127,46 +138,59 @@ else:
 # ------------------------------
 st.subheader("Injury Frequency Across Months & Clubs")
 if 'club' in df_filtered.columns and 'month' in df_filtered.columns:
-    injury_freq = df_filtered.groupby(['club', 'month']).size().reset_index(name='injury_count')
-    fig_heatmap = px.density_heatmap(
-        injury_freq,
-        x='month',
-        y='club',
-        z='injury_count',
-        color_continuous_scale='Viridis',
-        title="Monthly Injury Frequency by Club"
-    )
-    st.plotly_chart(fig_heatmap, use_container_width=True)
+    df_heat = df_filtered.dropna(subset=['club', 'month'])
+    if not df_heat.empty:
+        injury_freq = df_heat.groupby(['club', 'month']).size().reset_index(name='injury_count')
+        fig_heatmap = px.density_heatmap(
+            injury_freq,
+            x='month',
+            y='club',
+            z='injury_count',
+            color_continuous_scale='Viridis',
+            title="Monthly Injury Frequency by Club"
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+    else:
+        st.info("No valid data for Injury Frequency Heatmap.")
 else:
-    st.info("Insufficient data to display Injury Frequency Heatmap.")
+    st.info("Columns 'club' or 'month' missing.")
 
 # ------------------------------
 # Visualization 4: Player Age vs Performance Drop
 # ------------------------------
 st.subheader("Player Age vs Performance Drop")
 if 'age' in df_filtered.columns and 'performance_drop' in df_filtered.columns:
-    fig_scatter = px.scatter(
-        df_filtered,
-        x='age',
-        y='performance_drop',
-        color='club' if 'club' in df_filtered.columns else None,
-        size='performance_drop',
-        hover_data=['player_name', 'injury_type', 'season'],
-        title="Player Age vs Performance Drop"
-    )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    df_scatter = df_filtered.dropna(subset=['age', 'performance_drop'])
+    if not df_scatter.empty:
+        hover_cols = [col for col in ['player_name', 'injury_type', 'season'] if col in df_scatter.columns]
+        fig_scatter = px.scatter(
+            df_scatter,
+            x='age',
+            y='performance_drop',
+            color='club' if 'club' in df_scatter.columns else None,
+            size='performance_drop',
+            hover_data=hover_cols,
+            title="Player Age vs Performance Drop"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    else:
+        st.info("No valid data to plot Age vs Performance Drop.")
 else:
-    st.info("Insufficient data to display Age vs Performance Drop.")
+    st.info("Columns 'age' or 'performance_drop' missing. Cannot display scatter plot.")
 
 # ------------------------------
 # Visualization 5: Leaderboard of Comeback Players
 # ------------------------------
 st.subheader("Leaderboard: Comeback Players")
 if 'player_name' in df_filtered.columns and 'rating_improvement' in df_filtered.columns:
-    comeback_leaderboard = df_filtered.groupby('player_name')['rating_improvement'].mean().sort_values(ascending=False).head(10).reset_index()
-    st.dataframe(comeback_leaderboard.style.background_gradient(subset=['rating_improvement'], cmap='Greens'))
+    df_leaderboard = df_filtered.dropna(subset=['player_name', 'rating_improvement'])
+    if not df_leaderboard.empty:
+        comeback_leaderboard = df_leaderboard.groupby('player_name')['rating_improvement'].mean().sort_values(ascending=False).head(10).reset_index()
+        st.dataframe(comeback_leaderboard.style.background_gradient(subset=['rating_improvement'], cmap='Greens'))
+    else:
+        st.info("No valid data for Comeback Leaderboard.")
 else:
-    st.info("Insufficient data to display Comeback Leaderboard.")
+    st.info("Columns 'player_name' or 'rating_improvement' missing.")
 
 # ------------------------------
 # Footer
