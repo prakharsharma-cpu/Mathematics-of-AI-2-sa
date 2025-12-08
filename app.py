@@ -1,4 +1,4 @@
-# footlens_dashboard_upload.py
+# footlens_dashboard_debugged.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,12 +12,12 @@ Upload your dataset or use a generated sample to explore player injuries and tea
 
 # --- Step 1: Upload CSV ---
 uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
-use_sample = False
+use_sample = False  # always define this
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 else:
-    st.info("No CSV uploaded. Generating sample dataset for demo purposes.")
+    st.info("No CSV uploaded. Using sample dataset for demonstration.")
     use_sample = True
 
 # --- Step 2: Data Preprocessing ---
@@ -61,41 +61,31 @@ def preprocess_data(df, use_sample=False):
     if "injury_end_date" in df.columns:
         df["injury_end_date"] = pd.to_datetime(df["injury_end_date"])
 
-    # Create new metrics
+    # Metrics
     if "pre_injury_rating" in df.columns and "post_injury_rating" in df.columns:
         df["rating_drop"] = df["pre_injury_rating"] - df["post_injury_rating"]
         df["rating_improvement"] = df["post_injury_rating"] - df["pre_injury_rating"]
     if "injury_start_date" in df.columns and "injury_end_date" in df.columns:
         df["injury_duration"] = (df["injury_end_date"] - df["injury_start_date"]).dt.days
-
-    # Team performance drop index
     if "matches_played" in df.columns and "rating_drop" in df.columns:
         df["team_perf_drop_index"] = df["rating_drop"] * df["matches_played"] / df["matches_played"].max()
-
-    # Injury month for heatmap
     if "injury_start_date" in df.columns:
         df["injury_month"] = df["injury_start_date"].dt.month
 
     return df
 
+# Call preprocessing
 df = preprocess_data(df, use_sample)
 
 # --- Sidebar Filters ---
 st.sidebar.header("Filters")
-if "season" in df.columns:
-    season_filter = st.sidebar.multiselect("Season", options=df["season"].unique(), default=df["season"].unique())
-else:
-    season_filter = df["season"].unique() if "season" in df.columns else None
-
-if "team" in df.columns:
-    team_filter = st.sidebar.multiselect("Team", options=df["team"].unique(), default=df["team"].unique())
-else:
-    team_filter = df["team"].unique() if "team" in df.columns else None
+season_filter = st.sidebar.multiselect("Season", options=df["season"].unique(), default=df["season"].unique() if "season" in df.columns else None)
+team_filter = st.sidebar.multiselect("Team", options=df["team"].unique(), default=df["team"].unique() if "team" in df.columns else None)
 
 df_filtered = df.copy()
-if season_filter is not None:
+if season_filter:
     df_filtered = df_filtered[df_filtered["season"].isin(season_filter)]
-if team_filter is not None:
+if team_filter:
     df_filtered = df_filtered[df_filtered["team"].isin(team_filter)]
 
 # --- Visualizations ---
@@ -146,13 +136,12 @@ if "player_name" in df_filtered.columns and "rating_improvement" in df_filtered.
     leaderboard = df_filtered.groupby("player_name")["rating_improvement"].mean().sort_values(ascending=False).head(10)
     st.table(leaderboard.reset_index().rename(columns={"rating_improvement": "Avg Rating Improvement"}))
 
-# --- Step 5: What-If Simulation ---
+# --- What-If Simulation ---
 st.subheader("What-If Simulation: Estimate Team Points Drop if Player is Injured")
 if "team" in df_filtered.columns and "rating_drop" in df_filtered.columns:
     sim_player = st.selectbox("Select Player for Simulation", df_filtered["player_name"].unique(), key="sim_player")
     sim_team = df_filtered[df_filtered["player_name"] == sim_player]["team"].values[0]
     sim_rating_drop = df_filtered[df_filtered["player_name"] == sim_player]["rating_drop"].mean()
     sim_matches = df_filtered[df_filtered["player_name"] == sim_player]["matches_played"].mean()
-    # Example simple simulation formula
     estimated_points_loss = sim_rating_drop * sim_matches / 2
     st.metric(label=f"Estimated Points Loss for {sim_team} if {sim_player} is injured", value=f"{estimated_points_loss:.1f}")
