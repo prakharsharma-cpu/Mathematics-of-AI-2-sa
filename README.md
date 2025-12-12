@@ -45,8 +45,11 @@ KPI Cards: Quick summary statistics are displayed, including Total Injuries, Ave
 The dashboard features more than five interactive Plotly charts, directly addressing the business questions.
 
 Top 10 Injuries by GD Drop (Bar Chart) 
-Injury Seasonality by Month & Club (Heatmap) 
+
+Injury Seasonality by Month & Club (Heatmap)
+
 Age vs Performance Drop (Scatter plot, bubble size = recovery duration) 
+
 Player Rating Timeline (Line Chart showing 'Rating Before' vs. 'Rating After' injury)
 
 🚀 Deployment
