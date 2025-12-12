@@ -3,6 +3,7 @@
 This project is a Streamlit-based analytical dashboard designed to explore the impact of football player injuries on team performance, match outcomes, and player recovery/comeback ratings. This dashboard was developed as the Summative Assessment (SA) for the 'Mathematics for AI-II' course.
 
 🔗 Links
+
 Component
 LinkLive Streamlit App
 https://mathematics-of-ai-2-sa-3e9znjttnwalmh3jgankda.
