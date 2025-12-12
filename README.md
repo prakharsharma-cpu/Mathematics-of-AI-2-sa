@@ -1,1 +1,55 @@
-⚽ Player Injury & Team Performance Dashboard (Mathematics for AI-II SA)This project, part of the Mathematics for AI-II Summative Assessment, delivers an interactive Player Injury and Team Performance Dashboard built with Streamlit and Plotly. The goal is to analyze the quantitative impact of football player injuries on team performance, match outcomes (Goal Difference), and individual player recovery/comeback ratings1.🔗 Quick AccessLive Streamlit App: https://mathematics-of-ai-2-sa-3e9znjttnwalmh3jgankda.streamlit.app 2GitHub Repository: https://github.com/prakharsharma-cpu/Mathematics-of-AI-2-sa 3🎯 Project ObjectiveThe primary aim was to create a comprehensive analytical tool that provides a full view of player injuries across seasons4444.Key Focus Areas:Data cleaning and preprocessing 5Feature engineering (ratings, GD drop, recovery time) 6Exploratory Data Analysis (EDA) 7Interactive visualization (5+ charts using Plotly) 8888Deployment via GitHub and Streamlit Cloud 9❓ Business Questions AddressedThe dashboard and underlying analysis were guided by key business questions to ensure relevance and actionable insights10101010:Which injuries caused the biggest team performance drop? 11Which clubs and months have the highest number of injuries (Seasonality)? 12How does a player’s rating change after returning from an injury? 13Which players had the strongest comebacks? 14Does age affect performance drop or recovery duration? 15🛠️ Data Processing & Feature EngineeringThe initial dataset, containing information on player injuries, performance ratings, and goal difference (GD), underwent a complete cleaning process using Pandas and NumPy16161616.✔ Data Cleaning"N.A." and empty values were replaced with NaN17.Injury and return dates were converted to datetime objects18.Numeric columns were cleaned by removing characters like "(S)"19.Invalid rows with negative or missing recovery durations were removed20.✔ Feature Engineering (Crucial for Analysis)New columns were generated to power the dashboard's analytics21212121:New FeatureFormula / DescriptionPurposePerformance_Drop_Index$GD\ before - GD\ missed$ 22Measures team performance impact 23Rating_Improvement$Rating\ after - Rating\ before$ 24Quantifies player comeback strength 25Recovery_DurationCalculated in days 26Duration of absence for recovery analysis 27Injury_MonthDerived from the injury date 28Used for seasonality analysis 29Avg_Rating_Before / Avg_Rating_AfterAverage player performance rating 30Used for comeback analysis📊 Dashboard Features & VisualizationsThe Streamlit dashboard is interactive, featuring a sidebar for filtering and various KPI cards for a quick summary313131313131313131.Key Dashboard Components:Sidebar Filters: Allows selection by Team, Position, and individual Player (for deep-dive analysis)32.KPI Cards: Display Total injuries filtered, Average recovery duration, Average performance drop, and Average comeback rating33.Main Visualizations (All built with Plotly):Top 10 Injuries by GD Drop (Bar Chart): Directly answers which injuries had the biggest performance drop34343434.Injury Seasonality by Month & Club (Heatmap): Shows injury patterns and which clubs/months have the highest injury counts35353535.Age vs Performance Drop (Scatter Plot): Analyzes the impact of age on performance drop, with bubble size representing recovery duration36363636.Player Rating Timeline (Before vs After) (Line Chart): Provides a deep-dive, player-specific view of rating change after injury return37.🚀 DeploymentThe project meets the deployment requirements by being hosted on Streamlit Cloud and having all code committed to GitHub38383838.Repository Structure:app.py (Main Streamlit dashboard code) 39requirements.txt (All necessary Python libraries) 40README.md (Project explanation) 41The application was deployed by linking the GitHub repository to Streamlit Cloud and selecting app.py as the main file42.
+⚽ Player Injury and Team Performance Dashboard
+
+This project is a Streamlit-based analytical dashboard designed to explore the impact of football player injuries on team performance, match outcomes, and player recovery/comeback ratings. This dashboard was developed as the Summative Assessment (SA) for the 'Mathematics for AI-II' course.
+
+🔗 Links
+Component
+LinkLive Streamlit App
+https://mathematics-of-ai-2-sa-3e9znjttnwalmh3jgankda.
+
+streamlit.app 
+GitHub Repository
+https://github.com/prakharsharma-cpu/Mathematics-of-AI-2-sa 3
+
+🎯 Objective
+
+The main goal was to create an interactive dashboard that provides a full analytical view of player injuries across seasons.
+
+Key questions addressed by the analysis:
+Which injuries caused the biggest team performance drop (Goal Difference)?
+Which clubs and months have the highest number of injuries (Seasonality)?
+How does a player’s rating change after returning from an injury?
+Does age affect performance drop or recovery duration?
+
+✨ Features and Methodology
+
+The project included a complete data science pipeline:
+
+1. Data Processing & Feature Engineering 
+
+Cleaning: Handled missing values (N.A./empty values converted to NaN), converted dates to datetime, and cleaned numeric columns.
+Engineered Features: Created new columns essential for the analysis:
+Performance_Drop_Index = GD before − GD missed 
+Rating_Improvement = Rating after − Rating before 
+Recovery_Duration in days 
+Injury_Month (for seasonality) 
+
+2. Dashboard Interface (UI/UX) 
+
+Filters: Interactive sidebar filters for Team, Position, and Player selection.
+KPI Cards: Quick summary statistics are displayed, including Total Injuries, Average Recovery Duration, Average Performance Drop, and Average Comeback Rating.
+
+3. Visualisations (Plotly)
+
+The dashboard features more than five interactive Plotly charts, directly addressing the business questions.
+
+Top 10 Injuries by GD Drop (Bar Chart) 
+Injury Seasonality by Month & Club (Heatmap) 
+Age vs Performance Drop (Scatter plot, bubble size = recovery duration) 
+Player Rating Timeline (Line Chart showing 'Rating Before' vs. 'Rating After' injury)
+
+🚀 Deployment
+
+The final dashboard was deployed using GitHub and Streamlit Cloud.
+Repository Contents: app.py (main code), requirements.txt (dependencies), and README.md.
+Process: The GitHub repository was linked to Streamlit Cloud, and the app.py file was selected for deployment, generating the live application link.
