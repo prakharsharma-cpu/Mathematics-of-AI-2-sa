@@ -57,3 +57,4 @@ Player Rating Timeline (Line Chart showing 'Rating Before' vs. 'Rating After' in
 The final dashboard was deployed using GitHub and Streamlit Cloud.
 Repository Contents: app.py (main code), requirements.txt (dependencies), and README.md.
 Process: The GitHub repository was linked to Streamlit Cloud, and the app.py file was selected for deployment, generating the live application link.
+
